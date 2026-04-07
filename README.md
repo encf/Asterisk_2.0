@@ -3,6 +3,65 @@
 This directory contains the implementation of the Asterisk fair protocol.
 The protocol is implemented in C++17 and [CMake](https://cmake.org/) is used as the build system.
 
+## 🚀 从零开始跑通（Ubuntu 小白版）
+
+> 下面按“复制即可执行”的顺序写好，默认你在 Ubuntu 22.04/24.04。
+
+### 0) 获取代码
+```sh
+git clone <你的仓库地址> Asterisk
+cd Asterisk
+```
+
+### 1) 安装系统依赖
+```sh
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake git pkg-config \
+  libgmp-dev libntl-dev libboost-all-dev nlohmann-json3-dev libssl-dev
+```
+
+### 2) 安装 EMP Tool（推荐先用官方脚本）
+```sh
+wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
+python install.py --deps --tool
+```
+
+如果你所在网络环境里 `git clone github.com` 不稳定/被限制，可用 tarball 方式安装：
+```sh
+wget -O /tmp/emp-tool.tar.gz https://codeload.github.com/emp-toolkit/emp-tool/tar.gz/refs/heads/master
+tar -xzf /tmp/emp-tool.tar.gz -C /tmp
+cmake -S /tmp/emp-tool-master -B /tmp/emp-tool-master/build -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/emp-tool-master/build -j"$(nproc)"
+sudo cmake --install /tmp/emp-tool-master/build
+```
+
+### 3) 编译项目
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)" --target benchmarks tests
+```
+
+### 4) 先做一个最小验收（确认真的跑通）
+```sh
+./build/benchmarks/asterisk_mpc --help
+./build/benchmarks/asterisk2_mpc --help
+```
+
+### 5) 跑一个最小实验（4 个本地进程：3 个计算方 + 1 个 helper）
+```sh
+for pid in 0 1 2 3; do
+  ./build/benchmarks/asterisk2_mpc --localhost -n 3 -p "$pid" -g 1 -d 10 -r 1 \
+    --security-model semi-honest -o /tmp/a2_quickstart_p"$pid".json &
+done
+wait
+```
+
+### 6) 常见报错速查
+- **`Could not find ... emp-toolConfig.cmake`**：EMP Tool 没安装成功，回到第 2 步重新安装。
+- **`Address already in use`**：端口冲突；换 `--port` 或等上次进程退出。
+- **多进程卡住**：通常是某个 `pid` 没启动齐（`0..n` 必须全起）。
+
 ## External Dependencies
 The following libraries need to be installed separately and should be available to the build system and compiler.
 
