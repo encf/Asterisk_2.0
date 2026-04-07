@@ -47,6 +47,14 @@ void benchmark(const bpo::variables_map& opts) {
   auto seed = opts["seed"].as<size_t>();
   auto repeat = opts["repeat"].as<size_t>();
   auto port = opts["port"].as<int>();
+  auto security_model_str = opts["security-model"].as<std::string>();
+
+  asterisk2::SecurityModel security_model = asterisk2::SecurityModel::kSemiHonest;
+  if (security_model_str == "malicious") {
+    security_model = asterisk2::SecurityModel::kMalicious;
+  } else if (security_model_str != "semi-honest") {
+    throw std::runtime_error("Unsupported security-model, expected semi-honest or malicious");
+  }
 
   std::shared_ptr<io::NetIOMP> network = nullptr;
   if (opts["localhost"].as<bool>()) {
@@ -72,22 +80,55 @@ void benchmark(const bpo::variables_map& opts) {
                             {"num-parties", nP},
                             {"pid", pid},
                             {"seed", seed},
-                            {"repeat", repeat}};
+                            {"repeat", repeat},
+                            {"security_model", security_model_str}};
   output_data["benchmarks"] = json::array();
 
   for (size_t r = 0; r < repeat; ++r) {
-    asterisk2::Protocol proto(nP, pid, network, circ, static_cast<int>(seed));
+    asterisk2::ProtocolConfig cfg;
+    cfg.security_model = security_model;
+    asterisk2::Protocol proto(nP, pid, network, circ, static_cast<int>(seed), cfg);
 
     network->sync();
-    StatsPoint start(*network);
+    StatsPoint offline_start(*network);
     auto triples = proto.offline();
+    StatsPoint offline_end(*network);
+
+    network->sync();
+    StatsPoint online_start(*network);
     if (pid < nP) {
       (void)proto.online(inputs, triples);
     }
-    StatsPoint end(*network);
+    StatsPoint online_end(*network);
 
-    auto rbench = end - start;
-    output_data["benchmarks"].push_back(rbench);
+    auto offline_bench = offline_end - offline_start;
+    auto online_bench = online_end - online_start;
+
+    size_t offline_bytes = 0;
+    for (const auto& val : offline_bench["communication"]) {
+      offline_bytes += val.get<int64_t>();
+    }
+    size_t online_bytes = 0;
+    for (const auto& val : online_bench["communication"]) {
+      online_bytes += val.get<int64_t>();
+    }
+
+    // Communication count is estimated at protocol message-layer:
+    // offline: helper sends one triple tuple per multiplication gate to Pn.
+    // online: each multiplication opens d and e with all-to-all broadcast.
+    size_t mul_gates = gates_per_level * depth;
+    size_t offline_comm_count = (pid == nP ? mul_gates : 0);
+    size_t online_comm_count =
+        (pid < nP ? mul_gates * 2 * (nP - 1) : 0);
+
+    output_data["benchmarks"].push_back({
+        {"offline", offline_bench},
+        {"online", online_bench},
+        {"offline_bytes", offline_bytes},
+        {"online_bytes", online_bytes},
+        {"offline_comm_count", offline_comm_count},
+        {"online_comm_count", online_comm_count},
+    });
   }
 
   if (opts.count("output") != 0) {
@@ -104,6 +145,8 @@ bpo::options_description programOptions() {
       ("pid,p", bpo::value<size_t>()->required(), "Party ID.")
       ("seed", bpo::value<size_t>()->default_value(200), "Value of the random seed.")
       ("localhost", bpo::bool_switch(), "All parties are on same machine.")
+      ("security-model", bpo::value<std::string>()->default_value("semi-honest"),
+       "Security model: semi-honest or malicious.")
       ("port", bpo::value<int>()->default_value(10000), "Base port for networking.")
       ("output,o", bpo::value<std::string>(), "File to save benchmarks.")
       ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of repetitions.");

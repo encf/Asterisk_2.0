@@ -53,6 +53,14 @@ On Ubuntu, you can install all required dependencies (including `emp-tool`) with
 ./scripts/install_deps_ubuntu.sh
 ```
 
+If GitHub cloning is restricted in your environment, you can use the official
+EMP installer script:
+
+```sh
+wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
+python install.py --deps --tool
+```
+
 Then compile:
 
 ```sh
@@ -109,6 +117,8 @@ Execute the following commands from the `build` directory created during compila
 #
 # 该程序需要启动 n+1 个进程：其中 0..n-1 为计算方，n 为 helper。
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5
+# 安全模型参数（目前支持 semi-honest；malicious 预留接口）
+./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 --security-model semi-honest
 
 # The `asterisk_mpc` script in the repository root can be used to run the programs 
 # for all parties from the same terminal.
@@ -134,3 +144,33 @@ Execute the following commands from the `build` directory created during compila
 # Benchmark Darkpool VM algorithm for buy list size = sell list size = 5/10/25/50/100.
 ./../Darkpool_VM.sh
 ```
+
+## Asterisk2.0 vs Asterisk: 100 sequential multiplications
+
+Use `g=1, d=100` to represent 100 sequential multiplications:
+
+```sh
+# Asterisk2.0 (semi-honest)
+for pid in 0 1 2 3; do
+  ./benchmarks/asterisk2_mpc --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 -o asterisk2_chain100_p"$pid".json &
+done
+wait
+
+# Asterisk baseline: offline + online split
+for pid in 0 1 2 3; do
+  ./benchmarks/asterisk_offline --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 -o asterisk_offline_chain100_p"$pid".json &
+done
+wait
+
+for pid in 0 1 2 3; do
+  ./benchmarks/asterisk_online --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 -o asterisk_online_chain100_p"$pid".json &
+done
+wait
+```
+
+`asterisk2_mpc` 输出中包含以下关键字段便于对比：
+- `offline.time`, `online.time`
+- `offline_bytes`, `online_bytes`
+- `offline_comm_count`, `online_comm_count`
+
+本仓库内一次实际跑数结果可见：`docs_asterisk2_benchmark.md`。

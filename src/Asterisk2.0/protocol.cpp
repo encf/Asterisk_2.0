@@ -22,16 +22,22 @@ std::mt19937_64 helperTripleRng(int seed, size_t gate_idx) {
 }  // namespace
 
 Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
-                   LevelOrderedCircuit circ, int seed)
+                   LevelOrderedCircuit circ, int seed, ProtocolConfig config)
     : nP_(nP),
       id_(id),
       helper_id_(nP),
       seed_(seed),
+      config_(config),
       network_(std::move(network)),
       circ_(std::move(circ)),
       wire_share_(circ_.num_gates, Field(0)) {}
 
 std::vector<TripleShare> Protocol::offline() {
+  if (config_.security_model == SecurityModel::kMalicious) {
+    throw std::runtime_error(
+        "Asterisk2.0 malicious model is not implemented yet; use semi-honest mode");
+  }
+
   if (nP_ < 2) {
     throw std::runtime_error("Asterisk2.0 requires at least 2 computing parties");
   }
@@ -146,6 +152,11 @@ Field Protocol::evalMulGate(const FIn2Gate& gate, const TripleShare& t) {
 std::vector<Field> Protocol::online(
     const std::unordered_map<wire_t, Field>& inputs,
     const std::vector<TripleShare>& triples) {
+  if (config_.security_model == SecurityModel::kMalicious) {
+    throw std::runtime_error(
+        "Asterisk2.0 malicious model is not implemented yet; use semi-honest mode");
+  }
+
   if (id_ >= helper_id_) {
     return {};
   }

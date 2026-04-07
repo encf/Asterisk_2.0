@@ -21,10 +21,23 @@ struct TripleShare {
   Field c;
 };
 
+enum class SecurityModel {
+  kSemiHonest,
+  kMalicious,
+};
+
+struct ProtocolConfig {
+  SecurityModel security_model{SecurityModel::kSemiHonest};
+  // TODO(malicious): move pairwise/shared-key generation to Asterisk-style
+  // key management (see asterisk::OfflineEvaluator::keyGen) when adding
+  // maliciously secure preprocessing.
+};
+
 class Protocol {
  public:
   Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
-           LevelOrderedCircuit circ, int seed = 200);
+           LevelOrderedCircuit circ, int seed = 200,
+           ProtocolConfig config = {});
 
   std::vector<TripleShare> offline();
 
@@ -39,6 +52,7 @@ class Protocol {
   int id_;
   int helper_id_;
   int seed_;
+  ProtocolConfig config_;
   std::shared_ptr<io::NetIOMP> network_;
   LevelOrderedCircuit circ_;
   std::vector<Field> wire_share_;
