@@ -105,6 +105,11 @@ Execute the following commands from the `build` directory created during compila
 # repository root.
 ./benchmarks/asterisk_mpc -p $PID --localhost -g 100 -d 10 -n 5
 
+# Benchmark Asterisk2.0 semi-honest Beaver MPC.
+#
+# 该程序需要启动 n+1 个进程：其中 0..n-1 为计算方，n 为 helper。
+./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5
+
 # The `asterisk_mpc` script in the repository root can be used to run the programs 
 # for all parties from the same terminal.
 # For example, the previous benchmark can be run using the script as shown

@@ -7,7 +7,17 @@ namespace asterisk2 {
 
 namespace {
 Field randomField(std::mt19937_64& rng) {
-  return NTL::conv<Field>(static_cast<long>(rng()));
+  return NTL::conv<Field>(NTL::to_ZZ(static_cast<unsigned long>(rng())));
+}
+
+std::mt19937_64 partyHelperRng(int seed, int party_id, size_t gate_idx) {
+  return std::mt19937_64(static_cast<uint64_t>(seed) * 1000003ULL +
+                         static_cast<uint64_t>(party_id) * 1315423911ULL +
+                         gate_idx);
+}
+
+std::mt19937_64 helperTripleRng(int seed, size_t gate_idx) {
+  return std::mt19937_64(static_cast<uint64_t>(seed) * 7919ULL + gate_idx);
 }
 }  // namespace
 
@@ -22,6 +32,10 @@ Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
       wire_share_(circ_.num_gates, Field(0)) {}
 
 std::vector<TripleShare> Protocol::offline() {
+  if (nP_ < 2) {
+    throw std::runtime_error("Asterisk2.0 requires at least 2 computing parties");
+  }
+
   std::vector<FIn2Gate> mul_gates;
   for (const auto& level : circ_.gates_by_level) {
     for (const auto& gate : level) {
@@ -35,8 +49,7 @@ std::vector<TripleShare> Protocol::offline() {
 
   for (size_t g = 0; g < mul_gates.size(); ++g) {
     if (id_ <= nP_ - 2) {
-      std::mt19937_64 rng(static_cast<uint64_t>(seed_) * 1000003ULL +
-                          static_cast<uint64_t>(id_) * 1315423911ULL + g);
+      auto rng = partyHelperRng(seed_, id_, g);
       triples[g].a = randomField(rng);
       triples[g].b = randomField(rng);
       triples[g].c = randomField(rng);
@@ -45,7 +58,7 @@ std::vector<TripleShare> Protocol::offline() {
 
   if (id_ == helper_id_) {
     for (size_t g = 0; g < mul_gates.size(); ++g) {
-      std::mt19937_64 rg(static_cast<uint64_t>(seed_) * 7919ULL + g);
+      auto rg = helperTripleRng(seed_, g);
       Field a = randomField(rg);
       Field b = randomField(rg);
       Field c = a * b;
@@ -54,8 +67,7 @@ std::vector<TripleShare> Protocol::offline() {
       Field sum_b = Field(0);
       Field sum_c = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        std::mt19937_64 rng(static_cast<uint64_t>(seed_) * 1000003ULL +
-                            static_cast<uint64_t>(i) * 1315423911ULL + g);
+        auto rng = partyHelperRng(seed_, i, g);
         auto ai = randomField(rng);
         auto bi = randomField(rng);
         auto ci = randomField(rng);
