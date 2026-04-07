@@ -6,7 +6,7 @@ project(Asterisk VERSION 0.1)
 # Specify the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_FLAGS "-march=native -maes -mrdseed -lntl -g")
+set(CMAKE_C_FLAGS "-march=native -maes -mrdseed -g")
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
 
 # Path to custom cmake files for external libs
