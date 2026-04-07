@@ -32,6 +32,8 @@ struct ProtocolConfig {
   double sim_latency_ms{0.0};
   // Simulated bandwidth cap in megabits per second (<=0 disables).
   double sim_bandwidth_mbps{0.0};
+  // Enable parallel peer send/recv in each communication step.
+  bool parallel_send{false};
   // TODO(malicious): move pairwise/shared-key generation to Asterisk-style
   // key management (see asterisk::OfflineEvaluator::keyGen) when adding
   // maliciously secure preprocessing.

@@ -50,6 +50,7 @@ void benchmark(const bpo::variables_map& opts) {
   auto security_model_str = opts["security-model"].as<std::string>();
   auto sim_latency_ms = opts["sim-latency-ms"].as<double>();
   auto sim_bandwidth_mbps = opts["sim-bandwidth-mbps"].as<double>();
+  auto parallel_send = opts["parallel-send"].as<bool>();
 
   asterisk2::SecurityModel security_model = asterisk2::SecurityModel::kSemiHonest;
   if (security_model_str == "malicious") {
@@ -98,7 +99,8 @@ void benchmark(const bpo::variables_map& opts) {
                             {"repeat", repeat},
                             {"security_model", security_model_str},
                             {"sim_latency_ms", sim_latency_ms},
-                            {"sim_bandwidth_mbps", sim_bandwidth_mbps}};
+                            {"sim_bandwidth_mbps", sim_bandwidth_mbps},
+                            {"parallel_send", parallel_send}};
   output_data["benchmarks"] = json::array();
 
   for (size_t r = 0; r < repeat; ++r) {
@@ -106,6 +108,7 @@ void benchmark(const bpo::variables_map& opts) {
     cfg.security_model = security_model;
     cfg.sim_latency_ms = sim_latency_ms;
     cfg.sim_bandwidth_mbps = sim_bandwidth_mbps;
+    cfg.parallel_send = parallel_send;
     asterisk2::Protocol proto(nP, pid, network, circ, static_cast<int>(seed), cfg);
 
     network->sync();
@@ -135,11 +138,15 @@ void benchmark(const bpo::variables_map& opts) {
     // Communication counters:
     // - offline_comm_count: helper sends one triple tuple per multiplication gate to Pn.
     // - online_comm_rounds: batched-open does one interactive round per multiplicative depth.
-    // - online_send_count: per-round each party sends to (nP-1) peers.
+    // - online_send_count: if parallel_send=true, count one logical send per round;
+    //   else count per-peer sends.
     size_t mul_gates = gates_per_level * depth;
     size_t offline_comm_count = (pid == nP ? mul_gates : 0);
     size_t online_comm_rounds = (pid < nP ? mul_depths : 0);
-    size_t online_send_count = (pid < nP ? mul_depths * (nP - 1) : 0);
+    size_t online_send_count = 0;
+    if (pid < nP) {
+      online_send_count = parallel_send ? mul_depths : mul_depths * (nP - 1);
+    }
 
     output_data["benchmarks"].push_back({
         {"offline", offline_bench},
@@ -174,6 +181,8 @@ bpo::options_description programOptions() {
        "Simulated per-step latency in milliseconds.")
       ("sim-bandwidth-mbps", bpo::value<double>()->default_value(0.0),
        "Simulated bandwidth cap in Mbps (<=0 disables).")
+      ("parallel-send", bpo::bool_switch()->default_value(false),
+       "Use parallel-link accounting for online_send_count (one logical send per round).")
       ("port", bpo::value<int>()->default_value(10000), "Base port for networking.")
       ("output,o", bpo::value<std::string>(), "File to save benchmarks.")
       ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of repetitions.");

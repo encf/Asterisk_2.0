@@ -12,7 +12,7 @@ Environment:
 #   --sim-latency-ms 2 --sim-bandwidth-mbps 50
 for pid in 0 1 2 3; do
   ./benchmarks/asterisk2_mpc --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 \
-    --security-model semi-honest --sim-latency-ms 0 --sim-bandwidth-mbps 0 \
+    --security-model semi-honest --sim-latency-ms 0 --sim-bandwidth-mbps 0 --parallel-send \
     -o /tmp/asterisk2_chain100_p"$pid".json &
 done
 wait
@@ -36,7 +36,7 @@ wait
   - online bytes: `400`
   - offline comm-count: `0`
   - online comm-rounds: `100`
-  - online send-count: `200`
+  - online send-count: `100` (with `--parallel-send`)
 - Asterisk2.0 helper party
   - offline: `0.745918 ms`
   - offline bytes: `300`
@@ -69,3 +69,4 @@ Observed averages (n=3 computing parties, g=1, d=100):
 - Asterisk online raw time: `6.678695 ms`
 - Asterisk online simulated time: `406.764029 ms`
 - Asterisk online bytes: `533.33`
+- With `--parallel-send`, Asterisk2.0 `online_send_count` is reported with parallel-link accounting (one logical send per round).
