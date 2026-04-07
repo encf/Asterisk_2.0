@@ -46,6 +46,21 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 make <target>
 ```
 
+### Ubuntu one-click dependency install
+On Ubuntu, you can install all required dependencies (including `emp-tool`) with:
+
+```sh
+./scripts/install_deps_ubuntu.sh
+```
+
+Then compile:
+
+```sh
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j"$(nproc)" tests benchmarks
+```
+
 ## Usage
 A short description of the compiled programs is given below.
 All of them provide detailed usage description on using the `--help` option.
