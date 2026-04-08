@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "utils.h"
+#include "utils/network_cost_model.h"
 
 using namespace asterisk;
 using json = nlohmann::json;
@@ -95,6 +96,11 @@ void benchmark(const bpo::variables_map& opts) {
     auto sim_latency_ms = opts["sim-latency-ms"].as<double>();
     auto sim_bandwidth_mbps = opts["sim-bandwidth-mbps"].as<double>();
     auto sim_rounds_per_depth = opts["sim-rounds-per-depth"].as<size_t>();
+    auto net_preset = opts["net-preset"].as<std::string>();
+    auto bandwidth_bps = opts["bandwidth-bps"].as<uint64_t>();
+    auto latency_ms = opts["latency-ms"].as<double>();
+    auto net_model =
+        common::utils::resolveNetworkCostModel(net_preset, bandwidth_bps, latency_ms);
 
     std::shared_ptr<io::NetIOMP> network = nullptr;
     if (opts["localhost"].as<bool>()) {
@@ -131,7 +137,10 @@ void benchmark(const bpo::variables_map& opts) {
                                 {"repeat", repeat},
                                 {"sim_latency_ms", sim_latency_ms},
                                 {"sim_bandwidth_mbps", sim_bandwidth_mbps},
-                                {"sim_rounds_per_depth", sim_rounds_per_depth}};
+                                {"sim_rounds_per_depth", sim_rounds_per_depth},
+                                {"net_preset", net_preset},
+                                {"bandwidth_bps", net_model.bandwidth_bps},
+                                {"latency_ms", net_model.latency_ms}};
     output_data["benchmarks"] = json::array();
 
     std::cout << "--- Details ---\n";
@@ -206,6 +215,22 @@ void benchmark(const bpo::variables_map& opts) {
             output_data["benchmarks"].back()["simulated_rounds"] = depth * sim_rounds_per_depth;
             std::cout << "time_simulated: " << sim_ms << " ms\n";
         }
+        if (common::utils::isNetworkCostModelEnabled(net_model)) {
+            const size_t rounds = depth * sim_rounds_per_depth;
+            const size_t bytes_per_round = (rounds == 0 ? 0 : bytes_sent / rounds);
+            // Simplified communication model:
+            //   round_time = latency_ms + (bytes * 8) * 1000 / bandwidth_bps
+            // Ignores queueing delay and protocol overhead.
+            const double comm_model_round_ms =
+                common::utils::estimateRoundTimeMs(bytes_per_round, net_model);
+            const double comm_model_total_ms =
+                common::utils::estimateTotalTimeMs(comm_model_round_ms, rounds);
+            output_data["benchmarks"].back()["comm_model_round_ms"] = comm_model_round_ms;
+            output_data["benchmarks"].back()["comm_model_total_ms"] = comm_model_total_ms;
+            output_data["benchmarks"].back()["comm_model_rounds"] = rounds;
+            std::cout << "comm_model_round_ms: " << comm_model_round_ms << " ms\n";
+            std::cout << "comm_model_total_ms: " << comm_model_total_ms << " ms\n";
+        }
 
         std::cout << std::endl;
     }
@@ -239,6 +264,9 @@ bpo::options_description programOptions() {
         ("sim-latency-ms", bpo::value<double>()->default_value(0.0), "Simulated per-round latency in milliseconds.")
         ("sim-bandwidth-mbps", bpo::value<double>()->default_value(0.0), "Simulated bandwidth cap in Mbps (<=0 disables).")
         ("sim-rounds-per-depth", bpo::value<size_t>()->default_value(2), "Assumed online communication rounds per multiplicative depth.")
+        ("net-preset", bpo::value<std::string>()->default_value("none"), "Communication-cost preset: none|lan|wan.")
+        ("bandwidth-bps", bpo::value<uint64_t>()->default_value(0), "Communication-cost model bandwidth in bps (overrides preset when >0).")
+        ("latency-ms", bpo::value<double>()->default_value(0.0), "Communication-cost model latency in ms (overrides preset when >0).")
         ("port", bpo::value<int>()->default_value(10000), "Base port for networking.")
         ("output,o", bpo::value<std::string>(), "File to save benchmarks.")
         ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of times to run benchmarks.");

@@ -183,6 +183,11 @@ Execute the following commands from the `build` directory created during compila
   --sim-latency-ms 2 --sim-bandwidth-mbps 50
 # 可选：开启在线阶段并行对端发送/接收，并按并行链路口径统计发送次数
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 --parallel-send
+# 可选：通信代价模型预设（LAN/WAN）
+./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 --net-preset lan
+# 可选：自定义通信代价模型参数（单位：bps / ms）
+./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 \
+  --bandwidth-bps 100000000 --latency-ms 20
 
 # The `asterisk_mpc` script in the repository root can be used to run the programs 
 # for all parties from the same terminal.
@@ -198,6 +203,8 @@ Execute the following commands from the `build` directory created during compila
 # 可选：为 Asterisk online 统计增加网络仿真时间估计
 ./benchmarks/asterisk_online --localhost -n 3 -p $PID -g 1 -d 100 -r 1 \
   --sim-latency-ms 2 --sim-bandwidth-mbps 50 --sim-rounds-per-depth 2
+# 可选：通信代价模型预设（会输出每轮与总通信时间估计）
+./benchmarks/asterisk_online --localhost -n 3 -p $PID -g 1 -d 100 -r 1 --net-preset wan
 
 # Benchmark offline phase for Asterisk MPC.
 ./../asterisk_offline.sh 100 10
@@ -244,6 +251,9 @@ wait
 - 若开启 `--parallel-send`，在线 batched-open 将并行对端发送/接收，
   且 `online_send_count` 统计为每轮 1 次逻辑发送。
   对很窄的层（例如 `g=1`）会自动退化为串行路径以避免线程开销。
+- 若开启通信代价模型（`--net-preset` 或 `--bandwidth-bps/--latency-ms`）：
+  - `comm_model_round_ms`：每轮通信时间估计
+  - `comm_model_total_ms`：总通信时间估计
 - `online_comm_count`（兼容旧字段，当前等于 `online_comm_rounds`）
 
 当前实现已在在线阶段做按层 batched-open（把该层所有乘法门的 `d/e`
@@ -254,3 +264,21 @@ wait
 当前仿真模型按通信步骤(step)估算：`step_time = 传播延迟(一次) + 该步骤总传输字节/带宽`。
 
 本仓库内一次实际跑数结果可见：`docs_asterisk2_benchmark.md`。
+
+### Communication cost model (for experiments)
+
+支持一个简化通信模型（传播时延 + 发送时延，忽略排队和协议开销）：
+
+- 单轮：`round_time = latency_ms + (bytes_sent * 8) * 1000 / bandwidth_bps`
+- all-to-all（每方向其余 `n-1` 方各发 `msg_size_bytes`，且总出口带宽共享）：
+  `round_time = latency_ms + (msg_size_bytes * (n-1) * 8) * 1000 / bandwidth_bps`
+
+预设：
+- `LAN`: `bandwidth_bps=1_000_000_000`, `latency_ms=1`
+- `WAN`: `bandwidth_bps=100_000_000`, `latency_ms=20`
+
+可复用脚本：
+```sh
+python3 scripts/network_cost_model.py --preset lan --bytes-sent 4096 --rounds 100
+python3 scripts/network_cost_model.py --preset wan --msg-size-bytes 16 --parties 5 --rounds 100
+```

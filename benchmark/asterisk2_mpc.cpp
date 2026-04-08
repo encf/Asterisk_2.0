@@ -8,6 +8,7 @@
 
 #include "utils.h"
 #include "Asterisk2.0/protocol.h"
+#include "utils/network_cost_model.h"
 
 using common::utils::Field;
 using json = nlohmann::json;
@@ -51,6 +52,11 @@ void benchmark(const bpo::variables_map& opts) {
   auto sim_latency_ms = opts["sim-latency-ms"].as<double>();
   auto sim_bandwidth_mbps = opts["sim-bandwidth-mbps"].as<double>();
   auto parallel_send = opts["parallel-send"].as<bool>();
+  auto net_preset = opts["net-preset"].as<std::string>();
+  auto bandwidth_bps = opts["bandwidth-bps"].as<uint64_t>();
+  auto latency_ms = opts["latency-ms"].as<double>();
+  auto net_model =
+      common::utils::resolveNetworkCostModel(net_preset, bandwidth_bps, latency_ms);
 
   asterisk2::SecurityModel security_model = asterisk2::SecurityModel::kSemiHonest;
   if (security_model_str == "malicious") {
@@ -100,7 +106,10 @@ void benchmark(const bpo::variables_map& opts) {
                             {"security_model", security_model_str},
                             {"sim_latency_ms", sim_latency_ms},
                             {"sim_bandwidth_mbps", sim_bandwidth_mbps},
-                            {"parallel_send", parallel_send}};
+                            {"parallel_send", parallel_send},
+                            {"net_preset", net_preset},
+                            {"bandwidth_bps", net_model.bandwidth_bps},
+                            {"latency_ms", net_model.latency_ms}};
   output_data["benchmarks"] = json::array();
 
   for (size_t r = 0; r < repeat; ++r) {
@@ -147,6 +156,22 @@ void benchmark(const bpo::variables_map& opts) {
     if (pid < nP) {
       online_send_count = parallel_send ? mul_depths : mul_depths * (nP - 1);
     }
+    // Simplified communication model:
+    //   round_time = latency_ms + (bytes * 8) * 1000 / bandwidth_bps
+    // All-to-all variant (shared egress, one message per peer):
+    //   round_time = latency_ms + (msg_size_bytes * (n-1) * 8) * 1000 / bandwidth_bps
+    // This ignores queueing delay and protocol overhead.
+    double comm_model_round_ms = 0.0;
+    double comm_model_total_ms = 0.0;
+    if (pid < nP && common::utils::isNetworkCostModelEnabled(net_model)) {
+      const size_t msg_size_bytes = 2 * gates_per_level * common::utils::FIELDSIZE;
+      comm_model_round_ms =
+          common::utils::estimateAllToAllRoundTimeMs(msg_size_bytes, nP, net_model);
+      comm_model_total_ms =
+          common::utils::estimateTotalTimeMs(comm_model_round_ms, online_comm_rounds);
+      std::cout << "comm_model_round_ms: " << comm_model_round_ms << "\n";
+      std::cout << "comm_model_total_ms: " << comm_model_total_ms << "\n";
+    }
 
     output_data["benchmarks"].push_back({
         {"offline", offline_bench},
@@ -156,6 +181,8 @@ void benchmark(const bpo::variables_map& opts) {
         {"offline_comm_count", offline_comm_count},
         {"online_comm_rounds", online_comm_rounds},
         {"online_send_count", online_send_count},
+        {"comm_model_round_ms", comm_model_round_ms},
+        {"comm_model_total_ms", comm_model_total_ms},
         // keep online_comm_count for compatibility; now it denotes rounds.
         {"online_comm_count", online_comm_rounds},
     });
@@ -183,6 +210,12 @@ bpo::options_description programOptions() {
        "Simulated bandwidth cap in Mbps (<=0 disables).")
       ("parallel-send", bpo::bool_switch()->default_value(false),
        "Enable parallel peer send/recv for sufficiently wide levels; report one logical send per round.")
+      ("net-preset", bpo::value<std::string>()->default_value("none"),
+       "Communication-cost preset: none|lan|wan.")
+      ("bandwidth-bps", bpo::value<uint64_t>()->default_value(0),
+       "Communication-cost model bandwidth in bps (overrides preset when >0).")
+      ("latency-ms", bpo::value<double>()->default_value(0.0),
+       "Communication-cost model latency in ms (overrides preset when >0).")
       ("port", bpo::value<int>()->default_value(10000), "Base port for networking.")
       ("output,o", bpo::value<std::string>(), "File to save benchmarks.")
       ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of repetitions.");
