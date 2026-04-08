@@ -260,6 +260,9 @@ wait
 # - online.* / online_bytes: 仅乘法在线阶段
 # - truncation.* / truncation_bytes: 仅截断阶段
 
+# BGTEZ-SH（批量截断+比较）单测已加入：
+# - tests/asterisk2_bgtez_test
+
 # Asterisk baseline: offline + online split
 for pid in 0 1 2 3; do
   ./benchmarks/asterisk_offline --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 -o asterisk_offline_chain100_p"$pid".json &

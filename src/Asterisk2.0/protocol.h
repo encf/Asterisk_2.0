@@ -39,6 +39,10 @@ struct ProtocolConfig {
   // maliciously secure preprocessing.
 };
 
+struct BGTEZStats {
+  size_t batched_open_calls{0};
+};
+
 class Protocol {
  public:
   Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
@@ -52,6 +56,13 @@ class Protocol {
   std::vector<Field> probabilisticTruncate(const std::vector<Field>& x_shares,
                                            size_t ell_x, size_t m,
                                            size_t s);
+  std::vector<Field> batchedTruncateAll(const Field& x_share, size_t lx, size_t s,
+                                        BGTEZStats* stats = nullptr);
+  std::vector<Field> serialTruncateAllForTesting(const Field& x_share, size_t lx, size_t s,
+                                                 BGTEZStats* stats = nullptr);
+  Field bgtezCompare(const Field& x_share, size_t lx, size_t s,
+                    bool force_t = false, bool forced_t_value = false,
+                    BGTEZStats* stats = nullptr);
 
  private:
   struct OpenPair {
@@ -62,6 +73,7 @@ class Protocol {
   std::vector<OpenPair> openPairsToComputingParties(
       const std::vector<OpenPair>& local_pairs) const;
   Field openToComputingParties(const Field& local_share) const;
+  std::vector<Field> openVectorToComputingParties(const std::vector<Field>& local_vec) const;
   void maybeSimulateStep(size_t aggregate_bytes) const;
   void maybeSimulateLatency() const;
   void maybeSimulateBandwidth(size_t bytes) const;

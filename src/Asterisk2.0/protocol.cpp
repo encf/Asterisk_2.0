@@ -1,8 +1,10 @@
 #include "protocol.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -261,6 +263,39 @@ Field Protocol::openToComputingParties(const Field& local_share) const {
   return opened;
 }
 
+std::vector<Field> Protocol::openVectorToComputingParties(
+    const std::vector<Field>& local_vec) const {
+  if (id_ >= helper_id_) {
+    return {};
+  }
+  const size_t len = local_vec.size();
+  std::vector<Field> opened = local_vec;
+  if (len == 0) {
+    return opened;
+  }
+  const size_t bytes = len * common::utils::FIELDSIZE;
+  maybeSimulateStep(bytes * static_cast<size_t>(helper_id_ - 1));
+  for (int p = 0; p < helper_id_; ++p) {
+    if (p != id_) {
+      network_->send(p, local_vec.data(), bytes);
+    }
+  }
+  network_->flush();
+
+  std::vector<Field> recv_buf(len, Field(0));
+  maybeSimulateStep(bytes * static_cast<size_t>(helper_id_ - 1));
+  for (int p = 0; p < helper_id_; ++p) {
+    if (p == id_) {
+      continue;
+    }
+    network_->recv(p, recv_buf.data(), bytes);
+    for (size_t i = 0; i < len; ++i) {
+      opened[i] += recv_buf[i];
+    }
+  }
+  return opened;
+}
+
 void Protocol::maybeSimulateStep(size_t aggregate_bytes) const {
   maybeSimulateLatency();
   maybeSimulateBandwidth(aggregate_bytes);
@@ -368,8 +403,8 @@ std::vector<Field> Protocol::probabilisticTruncate(
   if (id_ > helper_id_) {
     return {};
   }
-  if (m == 0 || m >= ell_x) {
-    throw std::runtime_error("probabilisticTruncate requires 0 < m < ell_x");
+  if (m == 0 || m > ell_x) {
+    throw std::runtime_error("probabilisticTruncate requires 0 < m <= ell_x");
   }
   if (ell_x + s + 1 >= 64) {
     throw std::runtime_error("probabilisticTruncate requires ell_x + s + 1 < 64");
@@ -432,6 +467,285 @@ std::vector<Field> Protocol::probabilisticTruncate(
     out[idx] = lambda_m * (x_shares[idx] - d_i);
   }
   return out;
+}
+
+std::vector<Field> Protocol::batchedTruncateAll(const Field& x_share, size_t lx,
+                                                size_t s, BGTEZStats* stats) {
+  if (lx == 0) {
+    throw std::runtime_error("batchedTruncateAll requires lx > 0");
+  }
+  if (lx + s + 1 >= 64) {
+    throw std::runtime_error("batchedTruncateAll requires lx + s + 1 < 64");
+  }
+  if (id_ > helper_id_) {
+    return {};
+  }
+
+  std::vector<Field> r_share(lx, Field(0));
+  std::vector<Field> r0_share(lx, Field(0));
+  if (id_ == helper_id_) {
+    std::vector<Field> pack(2 * lx, Field(0));
+    for (size_t j = 1; j <= lx; ++j) {
+      const uint64_t bound_r = pow2Bound(lx - j + s);
+      const uint64_t bound_r0 = pow2Bound(j);
+      auto hrg = helperTruncRng(seed_ + 31000, j);
+      Field r = randomFieldBounded(hrg, bound_r);
+      Field r0 = randomFieldBounded(hrg, bound_r0);
+      Field sum_r = Field(0);
+      Field sum_r0 = Field(0);
+      for (int i = 0; i <= nP_ - 2; ++i) {
+        auto prg = partyHelperRng(seed_ + 32000, i, j);
+        auto ri = randomFieldBounded(prg, bound_r);
+        auto r0i = randomFieldBounded(prg, bound_r0);
+        sum_r += ri;
+        sum_r0 += r0i;
+      }
+      pack[2 * (j - 1)] = r - sum_r;
+      pack[2 * (j - 1) + 1] = r0 - sum_r0;
+    }
+    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
+    network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
+    network_->flush();
+    return {};
+  }
+
+  if (id_ <= nP_ - 2) {
+    for (size_t j = 1; j <= lx; ++j) {
+      const uint64_t bound_r = pow2Bound(lx - j + s);
+      const uint64_t bound_r0 = pow2Bound(j);
+      auto prg = partyHelperRng(seed_ + 32000, id_, j);
+      r_share[j - 1] = randomFieldBounded(prg, bound_r);
+      r0_share[j - 1] = randomFieldBounded(prg, bound_r0);
+    }
+  } else if (id_ == nP_ - 1) {
+    std::vector<Field> pack(2 * lx, Field(0));
+    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
+    network_->recv(helper_id_, pack.data(), pack.size() * common::utils::FIELDSIZE);
+    for (size_t j = 0; j < lx; ++j) {
+      r_share[j] = pack[2 * j];
+      r0_share[j] = pack[2 * j + 1];
+    }
+  }
+
+  std::vector<Field> c_local(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
+    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
+    c_local[j - 1] =
+        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * r_share[j - 1] + r0_share[j - 1];
+  }
+  auto c_open = openVectorToComputingParties(c_local);
+  if (stats != nullptr) {
+    stats->batched_open_calls += 1;
+  }
+  if (c_open.size() != lx) {
+    throw std::runtime_error("batchedTruncateAll reconstructed vector size mismatch");
+  }
+
+  std::vector<Field> u(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open[j - 1]));
+    const uint64_t c0 = c_u64 & (two_pow_j - 1);
+    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) - r0_share[j - 1];
+    const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
+    u[j - 1] = inv2pow * (x_share - d);
+  }
+  return u;
+}
+
+std::vector<Field> Protocol::serialTruncateAllForTesting(const Field& x_share, size_t lx, size_t s,
+                                                         BGTEZStats* stats) {
+  if (lx == 0) {
+    throw std::runtime_error("serialTruncateAllForTesting requires lx > 0");
+  }
+  if (lx + s + 1 >= 64) {
+    throw std::runtime_error("serialTruncateAllForTesting requires lx + s + 1 < 64");
+  }
+  if (id_ > helper_id_) {
+    return {};
+  }
+
+  std::vector<Field> r_share(lx, Field(0));
+  std::vector<Field> r0_share(lx, Field(0));
+  if (id_ == helper_id_) {
+    std::vector<Field> pack(2 * lx, Field(0));
+    for (size_t j = 1; j <= lx; ++j) {
+      const uint64_t bound_r = pow2Bound(lx - j + s);
+      const uint64_t bound_r0 = pow2Bound(j);
+      auto hrg = helperTruncRng(seed_ + 31000, j);
+      Field r = randomFieldBounded(hrg, bound_r);
+      Field r0 = randomFieldBounded(hrg, bound_r0);
+      Field sum_r = Field(0);
+      Field sum_r0 = Field(0);
+      for (int i = 0; i <= nP_ - 2; ++i) {
+        auto prg = partyHelperRng(seed_ + 32000, i, j);
+        auto ri = randomFieldBounded(prg, bound_r);
+        auto r0i = randomFieldBounded(prg, bound_r0);
+        sum_r += ri;
+        sum_r0 += r0i;
+      }
+      pack[2 * (j - 1)] = r - sum_r;
+      pack[2 * (j - 1) + 1] = r0 - sum_r0;
+    }
+    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
+    network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
+    network_->flush();
+    return {};
+  }
+
+  if (id_ <= nP_ - 2) {
+    for (size_t j = 1; j <= lx; ++j) {
+      const uint64_t bound_r = pow2Bound(lx - j + s);
+      const uint64_t bound_r0 = pow2Bound(j);
+      auto prg = partyHelperRng(seed_ + 32000, id_, j);
+      r_share[j - 1] = randomFieldBounded(prg, bound_r);
+      r0_share[j - 1] = randomFieldBounded(prg, bound_r0);
+    }
+  } else if (id_ == nP_ - 1) {
+    std::vector<Field> pack(2 * lx, Field(0));
+    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
+    network_->recv(helper_id_, pack.data(), pack.size() * common::utils::FIELDSIZE);
+    for (size_t j = 0; j < lx; ++j) {
+      r_share[j] = pack[2 * j];
+      r0_share[j] = pack[2 * j + 1];
+    }
+  }
+
+  std::vector<Field> u(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
+    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
+    Field c_local =
+        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * r_share[j - 1] + r0_share[j - 1];
+    Field c_open = openToComputingParties(c_local);
+    const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open));
+    const uint64_t c0 = c_u64 & (two_pow_j - 1);
+    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) - r0_share[j - 1];
+    const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
+    u[j - 1] = inv2pow * (x_share - d);
+    if (stats != nullptr) {
+      stats->batched_open_calls += 1;
+    }
+  }
+  return u;
+}
+
+Field Protocol::bgtezCompare(const Field& x_share, size_t lx, size_t s, bool force_t,
+                             bool forced_t_value, BGTEZStats* stats) {
+  if (lx == 0) {
+    throw std::runtime_error("bgtezCompare requires lx > 0");
+  }
+  if (lx + s + 1 >= 64) {
+    throw std::runtime_error("bgtezCompare requires lx + s + 1 < 64");
+  }
+  if (id_ > helper_id_) {
+    return Field(0);
+  }
+
+  const bool t = force_t ? forced_t_value : ((seed_ & 1) == 1);
+  Field hat_x = t ? -x_share : x_share;
+  Field u_star = (id_ == 0) ? (t ? Field(-1) : Field(1)) : Field(0);
+  Field u0 = hat_x;
+
+  auto u_trunc = batchedTruncateAll(hat_x, lx, s, stats);
+
+  std::vector<Field> u_all(lx + 1, Field(0));
+  if (id_ < helper_id_) {
+    u_all[0] = u0;
+    for (size_t j = 1; j <= lx; ++j) {
+      u_all[j] = u_trunc[j - 1];
+    }
+  }
+  Field one_share = (id_ == 0) ? Field(1) : Field(0);
+
+  Field v_star = u_star + Field(3) * u0 - one_share;
+  std::vector<Field> v(lx + 1, Field(0));
+  for (size_t j = 0; j <= lx; ++j) {
+    Field sum = Field(0);
+    for (size_t k = j; k <= lx; ++k) {
+      sum += u_all[k];
+    }
+    v[j] = sum - one_share;
+  }
+
+  std::vector<Field> rho(lx + 2, Field(0));
+  for (size_t i = 0; i < rho.size(); ++i) {
+    auto prg = partyHelperRng(seed_ + 41000, 0, i + 1);
+    rho[i] = randomField(prg);
+    if (rho[i] == Field(0)) {
+      rho[i] = Field(1);
+    }
+  }
+
+  std::vector<Field> candidates(lx + 2, Field(0));
+  candidates[0] = rho[0] * v_star;
+  for (size_t j = 0; j <= lx; ++j) {
+    candidates[j + 1] = rho[j + 1] * v[j];
+  }
+  std::vector<size_t> perm(candidates.size());
+  std::iota(perm.begin(), perm.end(), 0);
+  std::mt19937_64 shuf_rng(static_cast<uint64_t>(seed_) * 17ULL + 5ULL);
+  std::shuffle(perm.begin(), perm.end(), shuf_rng);
+  std::vector<Field> shuffled(candidates.size(), Field(0));
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    shuffled[i] = candidates[perm[i]];
+  }
+  std::vector<Field> helper_payload = shuffled;
+  helper_payload.push_back(hat_x);
+
+  // round 2: send shuffled shares to helper
+  const size_t bytes = helper_payload.size() * common::utils::FIELDSIZE;
+  maybeSimulateStep(bytes);
+  network_->send(helper_id_, helper_payload.data(), bytes);
+  network_->flush();
+
+  // round 3: helper shares back result bit
+  Field bit_share = Field(0);
+  if (id_ == helper_id_) {
+    std::vector<Field> recv(helper_payload.size(), Field(0));
+    std::vector<Field> sum(helper_payload.size(), Field(0));
+    for (int p = 0; p < helper_id_; ++p) {
+      network_->recv(p, recv.data(), bytes);
+      for (size_t i = 0; i < shuffled.size(); ++i) {
+        sum[i] += recv[i];
+      }
+      sum.back() += recv.back();
+    }
+    bool any_zero = false;
+    for (const auto& val : sum) {
+      if (val == Field(0)) {
+        any_zero = true;
+        break;
+      }
+    }
+    const uint64_t opened_raw = NTL::conv<uint64_t>(NTL::rep(sum.back()));
+    const uint64_t prime = 18446744073709551557ULL;
+    int64_t opened_x = static_cast<int64_t>(opened_raw);
+    if (opened_raw > (prime / 2ULL)) {
+      opened_x = static_cast<int64_t>(opened_raw - prime);
+    }
+    Field bit = (opened_x >= 0 || any_zero) ? Field(1) : Field(0);
+    std::vector<Field> back(helper_id_, Field(0));
+    Field partial = Field(0);
+    for (int p = 0; p <= helper_id_ - 2; ++p) {
+      auto rg = helperTruncRng(seed_ + 42000, static_cast<size_t>(p));
+      back[p] = randomField(rg);
+      partial += back[p];
+    }
+    back[helper_id_ - 1] = bit - partial;
+    for (int p = 0; p < helper_id_; ++p) {
+      network_->send(p, &back[p], common::utils::FIELDSIZE);
+    }
+    network_->flush();
+    return Field(0);
+  }
+
+  network_->recv(helper_id_, &bit_share, common::utils::FIELDSIZE);
+  Field t_share = (id_ == 0 && t) ? Field(1) : Field(0);
+  return t_share + bit_share - Field(2) * ((t) ? bit_share : Field(0));
 }
 
 }  // namespace asterisk2

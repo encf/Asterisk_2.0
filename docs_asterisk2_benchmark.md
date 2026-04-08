@@ -58,6 +58,9 @@ When enabled together with `--dump-output-shares`, JSON includes:
 - `truncation` and `truncation_bytes` (truncation-only timing/communication);
   `online` and `online_bytes` remain multiplication-only.
 
+BGTEZ-SH batched truncation/comparison regression tests:
+- `asterisk2_bgtez_test`
+
 Validation rule used by the script:
 - benchmark inputs are fixed as party-0=`5`, others=`0` for every input wire;
 - clear input per wire is therefore `5`;

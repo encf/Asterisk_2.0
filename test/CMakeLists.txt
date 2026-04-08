@@ -27,10 +27,13 @@ target_link_libraries(asterisk2_multiplication_test Boost::unit_test_framework T
 add_executable(asterisk2_truncation_test asterisk2_truncation.cpp)
 target_link_libraries(asterisk2_truncation_test Boost::unit_test_framework Threads::Threads Asterisk)
 
+add_executable(asterisk2_bgtez_test asterisk2_bgtez.cpp)
+target_link_libraries(asterisk2_bgtez_test Boost::unit_test_framework Threads::Threads Asterisk)
+
 add_custom_target(tests)
 add_dependencies(tests
     io_test sharing_test utils_test rand_test offline_test online_test assistedMPC_offline_test
-    asterisk2_multiplication_test asterisk2_truncation_test)
+    asterisk2_multiplication_test asterisk2_truncation_test asterisk2_bgtez_test)
 
 add_test(NAME io_test COMMAND io_test)
 add_test(NAME sharing_test COMMAND sharing_test)
@@ -41,3 +44,4 @@ add_test(NAME online_test COMMAND online_test)
 add_test(NAME assistedMPC_offline_test COMMAND assistedMPC_offline_test)
 add_test(NAME asterisk2_multiplication_test COMMAND asterisk2_multiplication_test)
 add_test(NAME asterisk2_truncation_test COMMAND asterisk2_truncation_test)
+add_test(NAME asterisk2_bgtez_test COMMAND asterisk2_bgtez_test)
