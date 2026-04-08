@@ -50,21 +50,31 @@ void benchmark(const bpo::variables_map& opts) {
     }
 
     network->sync();
+    StatsPoint offline_start(*network);
+    auto cmp_offline = proto.compare_offline(lx, slack, false, false);
+    StatsPoint offline_end(*network);
+    auto offline_bench = offline_end - offline_start;
+
+    network->sync();
     StatsPoint online_start(*network);
     asterisk2::BGTEZStats stats;
-    Field out_share = proto.bgtezCompare(x_share, lx, slack, false, false, &stats);
+    Field out_share = proto.compare_online(x_share, cmp_offline, &stats);
     StatsPoint online_end(*network);
     auto online_bench = online_end - online_start;
 
+    size_t offline_bytes = 0;
+    for (const auto& val : offline_bench["communication"]) {
+      offline_bytes += val.get<int64_t>();
+    }
     size_t online_bytes = 0;
     for (const auto& val : online_bench["communication"]) {
       online_bytes += val.get<int64_t>();
     }
 
     output_data["benchmarks"].push_back({
-        {"offline", {{"time", 0.0}, {"communication", json::array()}}},
+        {"offline", offline_bench},
         {"online", online_bench},
-        {"offline_bytes", 0},
+        {"offline_bytes", offline_bytes},
         {"online_bytes", online_bytes},
         {"bgtez_batched_open_calls", stats.batched_open_calls},
         {"output_share", (pid < nP) ? NTL::conv<uint64_t>(NTL::rep(out_share)) : 0},

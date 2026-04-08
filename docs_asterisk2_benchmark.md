@@ -60,8 +60,9 @@ online phase:
 
 When enabled together with `--dump-output-shares`, JSON includes:
 - `local_trunc_output_shares`
-- `truncation` and `truncation_bytes` (truncation-only timing/communication);
-  `online` and `online_bytes` remain multiplication-only.
+- `truncation_offline` and `truncation_offline_bytes` (truncation preprocessing only)
+- `truncation` and `truncation_bytes` (truncation online only)
+- `online` and `online_bytes` remain multiplication-only.
 
 BGTEZ-SH batched truncation/comparison regression tests:
 - `asterisk2_bgtez_test`

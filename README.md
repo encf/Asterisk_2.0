@@ -269,7 +269,8 @@ wait
 
 # 说明：乘法 online 与 truncation 统计已分开输出
 # - online.* / online_bytes: 仅乘法在线阶段
-# - truncation.* / truncation_bytes: 仅截断阶段
+# - truncation_offline.* / truncation_offline_bytes: 仅截断离线阶段
+# - truncation.* / truncation_bytes: 仅截断在线阶段
 
 # BGTEZ-SH（批量截断+比较）单测已加入：
 # - tests/asterisk2_bgtez_test

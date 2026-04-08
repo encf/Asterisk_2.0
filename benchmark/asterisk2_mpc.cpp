@@ -139,23 +139,34 @@ void benchmark(const bpo::variables_map& opts) {
     }
     StatsPoint online_end(*network);
 
-    json trunc_bench = {{"time", 0.0}, {"communication", json::array()}};
-    size_t trunc_bytes = 0;
+    json trunc_offline_bench = {{"time", 0.0}, {"communication", json::array()}};
+    json trunc_online_bench = {{"time", 0.0}, {"communication", json::array()}};
+    size_t trunc_offline_bytes = 0;
+    size_t trunc_online_bytes = 0;
     if (trunc_frac_bits > 0) {
+      asterisk2::TruncOfflineData trunc_offline_data;
       network->sync();
-      StatsPoint trunc_start(*network);
+      StatsPoint trunc_offline_start(*network);
+      trunc_offline_data =
+          proto.trunc_offline(circ.outputs.size(), trunc_lx, trunc_frac_bits, trunc_slack);
+      StatsPoint trunc_offline_end(*network);
+      trunc_offline_bench = trunc_offline_end - trunc_offline_start;
+      for (const auto& val : trunc_offline_bench["communication"]) {
+        trunc_offline_bytes += val.get<int64_t>();
+      }
+
+      network->sync();
+      StatsPoint trunc_online_start(*network);
       if (pid < nP) {
-        local_trunc_outputs =
-            proto.probabilisticTruncate(local_outputs, trunc_lx, trunc_frac_bits, trunc_slack);
+        local_trunc_outputs = proto.trunc_online(local_outputs, trunc_offline_data);
       } else {
         std::vector<Field> helper_placeholder(circ.outputs.size(), Field(0));
-        (void)proto.probabilisticTruncate(helper_placeholder, trunc_lx, trunc_frac_bits,
-                                          trunc_slack);
+        (void)proto.trunc_online(helper_placeholder, trunc_offline_data);
       }
-      StatsPoint trunc_end(*network);
-      trunc_bench = trunc_end - trunc_start;
-      for (const auto& val : trunc_bench["communication"]) {
-        trunc_bytes += val.get<int64_t>();
+      StatsPoint trunc_online_end(*network);
+      trunc_online_bench = trunc_online_end - trunc_online_start;
+      for (const auto& val : trunc_online_bench["communication"]) {
+        trunc_online_bytes += val.get<int64_t>();
       }
     }
 
@@ -203,10 +214,12 @@ void benchmark(const bpo::variables_map& opts) {
     json row = {
         {"offline", offline_bench},
         {"online", online_bench},
-        {"truncation", trunc_bench},
+        {"truncation_offline", trunc_offline_bench},
+        {"truncation", trunc_online_bench},
         {"offline_bytes", offline_bytes},
         {"online_bytes", online_bytes},
-        {"truncation_bytes", trunc_bytes},
+        {"truncation_offline_bytes", trunc_offline_bytes},
+        {"truncation_bytes", trunc_online_bytes},
         {"offline_comm_count", offline_comm_count},
         {"online_comm_rounds", online_comm_rounds},
         {"online_send_count", online_send_count},
