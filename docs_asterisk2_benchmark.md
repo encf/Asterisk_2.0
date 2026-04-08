@@ -1,5 +1,8 @@
 # Asterisk2.0 vs Asterisk (100 sequential multiplications)
 
+> Note: the protocol implementation has been refactored into explicit offline/online APIs
+> (`mul_*`, `trunc_*`, `compare_*`) so preprocessing and online rounds can be benchmarked separately.
+
 Environment:
 - parties: `n=3` computing + `1` helper
 - circuit: `g=1`, `d=100` (100 chain multiplications)

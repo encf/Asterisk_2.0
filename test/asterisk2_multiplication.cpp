@@ -68,3 +68,93 @@ BOOST_AUTO_TEST_CASE(single_mul_correctness) {
 
   BOOST_TEST(rec == Field(63));
 }
+
+BOOST_AUTO_TEST_CASE(mul_online_requires_offline_data) {
+  NTL::ZZ_pContext ZZ_p_ctx;
+  ZZ_p_ctx.save();
+  constexpr int nP = 3;
+  constexpr int base_port = 21100;
+
+  common::utils::Circuit<Field> circ;
+  auto w0 = circ.newInputWire();
+  auto w1 = circ.newInputWire();
+  auto wm = circ.addGate(common::utils::GateType::kMul, w0, w1);
+  circ.setAsOutput(wm);
+  auto level_circ = circ.orderGatesByLevel();
+
+  std::vector<std::future<bool>> parties;
+  for (int pid = 0; pid <= nP; ++pid) {
+    parties.push_back(std::async(std::launch::async, [&, pid]() {
+      ZZ_p_ctx.restore();
+      auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, base_port, nullptr, true);
+      asterisk2::Protocol proto(nP, pid, network, level_circ, 200);
+      if (pid == 0) {
+        std::unordered_map<common::utils::wire_t, Field> inputs;
+        inputs[w0] = Field(3);
+        inputs[w1] = Field(4);
+        asterisk2::MulOfflineData missing;
+        BOOST_CHECK_THROW(proto.mul_online(inputs, missing), std::runtime_error);
+      }
+      return true;
+    }));
+  }
+  for (auto& fut : parties) {
+    BOOST_CHECK(fut.get());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(mul_offline_online_equivalent_to_legacy_api) {
+  NTL::ZZ_pContext ZZ_p_ctx;
+  ZZ_p_ctx.save();
+  constexpr int nP = 3;
+  constexpr int helper = nP;
+  constexpr int base_port_legacy = 21200;
+  constexpr int base_port_split = 21300;
+
+  common::utils::Circuit<Field> circ;
+  auto w0 = circ.newInputWire();
+  auto w1 = circ.newInputWire();
+  auto wm = circ.addGate(common::utils::GateType::kMul, w0, w1);
+  circ.setAsOutput(wm);
+  auto level_circ = circ.orderGatesByLevel();
+
+  auto run = [&](int base_port, bool use_split) {
+    std::vector<std::future<Field>> parties;
+    for (int pid = 0; pid <= nP; ++pid) {
+      parties.push_back(std::async(std::launch::async, [&, pid]() {
+        ZZ_p_ctx.restore();
+        auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, base_port, nullptr, true);
+        asterisk2::Protocol proto(nP, pid, network, level_circ, 200);
+        if (pid == helper) {
+          if (use_split) {
+            (void)proto.mul_offline();
+          } else {
+            (void)proto.offline();
+          }
+          return Field(0);
+        }
+        std::unordered_map<common::utils::wire_t, Field> inputs;
+        inputs[w0] = (pid == 0) ? Field(11) : Field(0);
+        inputs[w1] = (pid == 0) ? Field(13) : Field(0);
+        if (use_split) {
+          auto off = proto.mul_offline();
+          auto out = proto.mul_online(inputs, off);
+          return out[0];
+        }
+        auto triples = proto.offline();
+        auto out = proto.online(inputs, triples);
+        return out[0];
+      }));
+    }
+    Field rec = Field(0);
+    for (int pid = 0; pid <= nP; ++pid) {
+      auto share = parties[pid].get();
+      if (pid < nP) {
+        rec += share;
+      }
+    }
+    return rec;
+  };
+
+  BOOST_TEST(run(base_port_legacy, false) == run(base_port_split, true));
+}

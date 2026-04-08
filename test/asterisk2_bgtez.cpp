@@ -2,8 +2,9 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <future>
+#include <fstream>
 #include <memory>
-#include <random>
+#include <sstream>
 #include <atomic>
 #include <vector>
 #include <unistd.h>
@@ -58,7 +59,7 @@ int fresh_port() {
 }
 
 std::vector<Field> run_bgtez_once(int x_clear, size_t lx, size_t s, int base_port,
-                                  bool force_t = false, bool t_val = false,
+                                  bool force_t = true, bool t_val = false,
                                   asterisk2::BGTEZStats* stat_out = nullptr) {
   common::utils::Circuit<Field> empty;
   auto level = empty.orderGatesByLevel();
@@ -72,7 +73,8 @@ std::vector<Field> run_bgtez_once(int x_clear, size_t lx, size_t s, int base_por
       asterisk2::Protocol p(nP, pid, net, level, 200);
       Field share = (pid == 0) ? Field(x_clear) : Field(0);
       asterisk2::BGTEZStats st;
-      Field out = p.bgtezCompare(share, lx, s, force_t, t_val, &st);
+      auto off = p.compare_offline(lx, s, force_t, t_val);
+      Field out = p.compare_online(share, off, &st);
       return std::make_pair(out, st);
     }));
   }
@@ -212,4 +214,43 @@ BOOST_AUTO_TEST_CASE(helper_zero_detection_regression) {
   }
   BOOST_TEST((NTL::conv<uint64_t>(NTL::rep(rpos)) % 2) == 1u);
   BOOST_TEST((NTL::conv<uint64_t>(NTL::rep(rneg)) % 2) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(compare_online_requires_offline_data) {
+  NTL::ZZ_pContext ctx;
+  ctx.save();
+  constexpr int base_port = 22600;
+  common::utils::Circuit<Field> empty;
+  auto level = empty.orderGatesByLevel();
+  std::vector<std::future<bool>> parties;
+  for (int pid = 0; pid <= nP; ++pid) {
+    parties.push_back(std::async(std::launch::async, [=, &ctx]() {
+      ctx.restore();
+      auto net = std::make_shared<io::NetIOMP>(pid, nP + 1, base_port, nullptr, true);
+      asterisk2::Protocol p(nP, pid, net, level, 200);
+      if (pid == 0) {
+        asterisk2::CompareOfflineData missing;
+        BOOST_CHECK_THROW((void)p.compare_online(Field(5), missing), std::runtime_error);
+      }
+      return true;
+    }));
+  }
+  for (auto& fut : parties) {
+    BOOST_CHECK(fut.get());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(prg_and_parallel_networking_regression_guard) {
+  std::ifstream in("../../src/Asterisk2.0/protocol.cpp");
+  if (!in.good()) {
+    in.open("../src/Asterisk2.0/protocol.cpp");
+  }
+  BOOST_REQUIRE(in.good());
+  std::stringstream ss;
+  ss << in.rdbuf();
+  const std::string code = ss.str();
+
+  BOOST_TEST(code.find("mt19937") == std::string::npos);
+  BOOST_TEST(code.find("sendFieldVectorToPeers(") != std::string::npos);
+  BOOST_TEST(code.find("recvFieldVectorsFromPeers(") != std::string::npos);
 }

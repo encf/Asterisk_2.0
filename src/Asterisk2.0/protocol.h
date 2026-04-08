@@ -21,6 +21,41 @@ struct TripleShare {
   Field c;
 };
 
+struct MulOfflineData {
+  std::vector<TripleShare> triples;
+  bool ready{false};
+};
+
+struct TruncOfflineData {
+  size_t ell_x{0};
+  size_t m{0};
+  size_t s{0};
+  std::vector<Field> r_share;
+  std::vector<Field> r0_share;
+  bool ready{false};
+};
+
+struct BatchedTruncOfflineData {
+  size_t lx{0};
+  size_t s{0};
+  std::vector<Field> r_share;
+  std::vector<Field> r0_share;
+  bool ready{false};
+};
+
+struct CompareMaskData {
+  std::vector<Field> rho;
+  std::vector<size_t> permutation;
+  bool t{false};
+  bool ready{false};
+};
+
+struct CompareOfflineData {
+  BatchedTruncOfflineData trunc_data;
+  CompareMaskData cmp_data;
+  bool ready{false};
+};
+
 enum class SecurityModel {
   kSemiHonest,
   kMalicious,
@@ -49,6 +84,17 @@ class Protocol {
            LevelOrderedCircuit circ, int seed = 200,
            ProtocolConfig config = {});
 
+  MulOfflineData mul_offline();
+  std::vector<Field> mul_online(const std::unordered_map<wire_t, Field>& inputs,
+                                const MulOfflineData& offline_data);
+  TruncOfflineData trunc_offline(size_t batch_size, size_t ell_x, size_t m, size_t s);
+  std::vector<Field> trunc_online(const std::vector<Field>& x_shares,
+                                  const TruncOfflineData& offline_data);
+  CompareOfflineData compare_offline(size_t lx, size_t s,
+                                     bool force_t = false, bool forced_t_value = false);
+  Field compare_online(const Field& x_share, const CompareOfflineData& offline_data,
+                       BGTEZStats* stats = nullptr);
+
   std::vector<TripleShare> offline();
 
   std::vector<Field> online(const std::unordered_map<wire_t, Field>& inputs,
@@ -74,6 +120,10 @@ class Protocol {
       const std::vector<OpenPair>& local_pairs) const;
   Field openToComputingParties(const Field& local_share) const;
   std::vector<Field> openVectorToComputingParties(const std::vector<Field>& local_vec) const;
+  std::vector<std::vector<Field>> recvFieldVectorsFromPeers(const std::vector<int>& peers,
+                                                            size_t len) const;
+  void sendFieldVectorToPeers(const std::vector<int>& peers, const std::vector<Field>& data) const;
+  std::vector<int> computingPeerIdsExcludingSelf() const;
   void maybeSimulateStep(size_t aggregate_bytes) const;
   void maybeSimulateLatency() const;
   void maybeSimulateBandwidth(size_t bytes) const;

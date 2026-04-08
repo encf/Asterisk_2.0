@@ -226,6 +226,16 @@ Execute the following commands from the `build` directory created during compila
 ./../Darkpool_VM.sh
 ```
 
+### Asterisk2.0 protocol API (offline/online split)
+
+`src/Asterisk2.0/protocol.h` now exposes explicit offline/online pairs for the three protocol families:
+
+- multiplication: `mul_offline(...)` + `mul_online(...)`
+- truncation: `trunc_offline(...)` + `trunc_online(...)`
+- comparison (BGTEZ): `compare_offline(...)` + `compare_online(...)`
+
+Legacy wrappers (`offline/online`, `probabilisticTruncate`, `bgtezCompare`) are kept for compatibility and internally call the split APIs.
+
 ## Asterisk2.0 vs Asterisk: 100 sequential multiplications
 
 Use `g=1, d=100` to represent 100 sequential multiplications:

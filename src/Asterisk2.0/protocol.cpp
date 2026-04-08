@@ -3,31 +3,68 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <limits>
 #include <numeric>
-#include <random>
 #include <stdexcept>
 #include <thread>
+
+#include <emp-tool/emp-tool.h>
 
 namespace asterisk2 {
 
 namespace {
-Field randomField(std::mt19937_64& rng) {
-  return NTL::conv<Field>(NTL::to_ZZ(static_cast<unsigned long>(rng())));
+using emp::block;
+
+constexpr uint64_t kPrime64Minus59 = 18446744073709551557ULL;
+
+enum class PrgLabel : uint64_t {
+  kMulShare = 0x4d554c5348415245ULL,
+  kMulHelper = 0x4d554c48454c5046ULL,
+  kTruncShare = 0x5452554e43534852ULL,
+  kTruncHelper = 0x5452554e43484c50ULL,
+  kCmpMask = 0x434d504d41534b53ULL,
+  kCmpShuffle = 0x434d505348554646ULL,
+  kCmpBit = 0x434d504249545f5fULL,
+  kCmpHelperShare = 0x434d504853484152ULL,
+};
+
+emp::PRG makePrg(int seed, int party_id, uint64_t idx, PrgLabel label) {
+  // Shared-key derived deterministic CSPRNG stream (EMP PRG).
+  const uint64_t lo = (static_cast<uint64_t>(static_cast<uint32_t>(seed)) << 32) ^
+                      static_cast<uint32_t>(party_id);
+  const uint64_t hi = idx ^ static_cast<uint64_t>(label);
+  block key = emp::makeBlock(hi, lo);
+  return emp::PRG(&key, 0);
 }
 
-std::mt19937_64 partyHelperRng(int seed, int party_id, size_t gate_idx) {
-  return std::mt19937_64(static_cast<uint64_t>(seed) * 1000003ULL +
-                         static_cast<uint64_t>(party_id) * 1315423911ULL +
-                         gate_idx);
+uint64_t prgUint64(emp::PRG& prg) {
+  uint64_t v = 0;
+  prg.random_data(&v, sizeof(v));
+  return v;
 }
 
-std::mt19937_64 helperTripleRng(int seed, size_t gate_idx) {
-  return std::mt19937_64(static_cast<uint64_t>(seed) * 7919ULL + gate_idx);
+Field prgField(emp::PRG& prg) {
+  return NTL::conv<Field>(NTL::to_ZZ(prgUint64(prg) % kPrime64Minus59));
 }
 
-std::mt19937_64 helperTruncRng(int seed, size_t idx) {
-  return std::mt19937_64(static_cast<uint64_t>(seed) * 104729ULL + idx);
+Field prgFieldBounded(emp::PRG& prg, uint64_t bound) {
+  if (bound == 0) {
+    return Field(0);
+  }
+  return NTL::conv<Field>(NTL::to_ZZ(prgUint64(prg) % bound));
+}
+
+Field prgNonZeroField(emp::PRG& prg) {
+  Field f = Field(0);
+  while (f == Field(0)) {
+    f = prgField(prg);
+  }
+  return f;
+}
+
+bool prgBit(emp::PRG& prg) {
+  return (prgUint64(prg) & 1ULL) == 1ULL;
 }
 
 uint64_t pow2Bound(size_t bits) {
@@ -37,12 +74,25 @@ uint64_t pow2Bound(size_t bits) {
   return (1ULL << bits);
 }
 
-Field randomFieldBounded(std::mt19937_64& rng, uint64_t bound) {
-  if (bound == 0) {
-    return Field(0);
+std::vector<uint8_t> serializeFieldVector(const std::vector<Field>& data) {
+  std::vector<uint8_t> out(data.size() * common::utils::FIELDSIZE);
+  for (size_t i = 0; i < data.size(); ++i) {
+    NTL::BytesFromZZ(out.data() + i * common::utils::FIELDSIZE,
+                     NTL::conv<NTL::ZZ>(data[i]), common::utils::FIELDSIZE);
   }
-  return NTL::conv<Field>(NTL::to_ZZ(static_cast<unsigned long>(rng() % bound)));
+  return out;
 }
+
+std::vector<Field> deserializeFieldVector(const std::vector<uint8_t>& in) {
+  const size_t len = in.size() / common::utils::FIELDSIZE;
+  std::vector<Field> out(len, Field(0));
+  for (size_t i = 0; i < len; ++i) {
+    out[i] = NTL::conv<Field>(NTL::ZZFromBytes(in.data() + i * common::utils::FIELDSIZE,
+                                               common::utils::FIELDSIZE));
+  }
+  return out;
+}
+
 }  // namespace
 
 Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
@@ -56,12 +106,74 @@ Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
       circ_(std::move(circ)),
       wire_share_(circ_.num_gates, Field(0)) {}
 
-std::vector<TripleShare> Protocol::offline() {
+std::vector<int> Protocol::computingPeerIdsExcludingSelf() const {
+  std::vector<int> peers;
+  if (id_ >= helper_id_) {
+    return peers;
+  }
+  for (int p = 0; p < helper_id_; ++p) {
+    if (p != id_) {
+      peers.push_back(p);
+    }
+  }
+  return peers;
+}
+
+void Protocol::sendFieldVectorToPeers(const std::vector<int>& peers,
+                                      const std::vector<Field>& data) const {
+  if (peers.empty() || data.empty()) {
+    return;
+  }
+  // Intentionally parallelized communication round.
+  auto payload = serializeFieldVector(data);
+  std::vector<std::thread> threads;
+  threads.reserve(peers.size());
+  for (int peer : peers) {
+    threads.emplace_back([&, peer]() {
+      auto* channel = network_->getSendChannel(peer);
+      channel->send_data(payload.data(), payload.size());
+      channel->flush();
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+}
+
+std::vector<std::vector<Field>> Protocol::recvFieldVectorsFromPeers(
+    const std::vector<int>& peers, size_t len) const {
+  if (peers.empty() || len == 0) {
+    return {};
+  }
+  const size_t bytes = len * common::utils::FIELDSIZE;
+  std::vector<std::vector<uint8_t>> recv_serialized(peers.size(),
+                                                    std::vector<uint8_t>(bytes));
+  // Intentionally parallelized communication round.
+  std::vector<std::thread> threads;
+  threads.reserve(peers.size());
+  for (size_t i = 0; i < peers.size(); ++i) {
+    threads.emplace_back([&, i]() {
+      auto* channel = network_->getRecvChannel(peers[i]);
+      channel->recv_data(recv_serialized[i].data(), recv_serialized[i].size());
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  std::vector<std::vector<Field>> out;
+  out.reserve(peers.size());
+  for (const auto& buf : recv_serialized) {
+    out.push_back(deserializeFieldVector(buf));
+  }
+  return out;
+}
+
+MulOfflineData Protocol::mul_offline() {
   if (config_.security_model == SecurityModel::kMalicious) {
     throw std::runtime_error(
         "Asterisk2.0 malicious model is not implemented yet; use semi-honest mode");
   }
-
   if (nP_ < 2) {
     throw std::runtime_error("Asterisk2.0 requires at least 2 computing parties");
   }
@@ -75,259 +187,62 @@ std::vector<TripleShare> Protocol::offline() {
     }
   }
 
-  std::vector<TripleShare> triples(mul_gates.size());
-
-  for (size_t g = 0; g < mul_gates.size(); ++g) {
-    if (id_ <= nP_ - 2) {
-      auto rng = partyHelperRng(seed_, id_, g);
-      triples[g].a = randomField(rng);
-      triples[g].b = randomField(rng);
-      triples[g].c = randomField(rng);
+  MulOfflineData out;
+  out.triples.resize(mul_gates.size());
+  if (id_ <= nP_ - 2) {
+    for (size_t g = 0; g < mul_gates.size(); ++g) {
+      auto prg = makePrg(seed_, id_, g, PrgLabel::kMulShare);
+      out.triples[g].a = prgField(prg);
+      out.triples[g].b = prgField(prg);
+      out.triples[g].c = prgField(prg);
     }
+    out.ready = true;
+    return out;
   }
 
   if (id_ == helper_id_) {
     for (size_t g = 0; g < mul_gates.size(); ++g) {
-      auto rg = helperTripleRng(seed_, g);
-      Field a = randomField(rg);
-      Field b = randomField(rg);
+      auto helper_prg = makePrg(seed_, helper_id_, g, PrgLabel::kMulHelper);
+      Field a = prgField(helper_prg);
+      Field b = prgField(helper_prg);
       Field c = a * b;
 
       Field sum_a = Field(0);
       Field sum_b = Field(0);
       Field sum_c = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto rng = partyHelperRng(seed_, i, g);
-        auto ai = randomField(rng);
-        auto bi = randomField(rng);
-        auto ci = randomField(rng);
-        sum_a += ai;
-        sum_b += bi;
-        sum_c += ci;
+        auto pprg = makePrg(seed_, i, g, PrgLabel::kMulShare);
+        sum_a += prgField(pprg);
+        sum_b += prgField(pprg);
+        sum_c += prgField(pprg);
       }
 
-      Field an = a - sum_a;
-      Field bn = b - sum_b;
-      Field cn = c - sum_c;
-      Field pack[3] = {an, bn, cn};
-      constexpr size_t kTripleElements = 3;
-      maybeSimulateStep(kTripleElements * common::utils::FIELDSIZE);
-      network_->send(nP_ - 1, pack, kTripleElements * common::utils::FIELDSIZE);
+      std::vector<Field> pack = {a - sum_a, b - sum_b, c - sum_c};
+      maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
+      network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
     }
     network_->flush();
-    return triples;
-  }
-
-  if (id_ >= helper_id_) {
-    return triples;
+    out.ready = true;
+    return out;
   }
 
   if (id_ == nP_ - 1) {
     for (size_t g = 0; g < mul_gates.size(); ++g) {
       Field pack[3];
-      constexpr size_t kTripleElements = 3;
-      maybeSimulateStep(kTripleElements * common::utils::FIELDSIZE);
-      network_->recv(helper_id_, pack, kTripleElements * common::utils::FIELDSIZE);
-      triples[g].a = pack[0];
-      triples[g].b = pack[1];
-      triples[g].c = pack[2];
+      maybeSimulateStep(3 * common::utils::FIELDSIZE);
+      network_->recv(helper_id_, pack, 3 * common::utils::FIELDSIZE);
+      out.triples[g] = {pack[0], pack[1], pack[2]};
     }
   }
-
-  return triples;
+  out.ready = true;
+  return out;
 }
 
-std::vector<Protocol::OpenPair> Protocol::openPairsToComputingParties(
-    const std::vector<OpenPair>& local_pairs) const {
-  if (id_ >= helper_id_) {
-    return {};
+std::vector<Field> Protocol::mul_online(const std::unordered_map<wire_t, Field>& inputs,
+                                        const MulOfflineData& offline_data) {
+  if (!offline_data.ready) {
+    throw std::runtime_error("mul_online requires ready MulOfflineData from mul_offline");
   }
-
-  const size_t gates = local_pairs.size();
-  std::vector<Field> send_buf(gates * 2);
-  for (size_t i = 0; i < gates; ++i) {
-    send_buf[2 * i] = local_pairs[i].d;
-    send_buf[2 * i + 1] = local_pairs[i].e;
-  }
-
-  const size_t peers = static_cast<size_t>(helper_id_ - 1);
-  maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers);
-  const bool use_parallel_io = config_.parallel_send && peers >= 3 && gates >= 64;
-  if (use_parallel_io) {
-    const size_t serialized_bytes = send_buf.size() * common::utils::FIELDSIZE;
-    std::vector<uint8_t> send_serialized(serialized_bytes);
-    for (size_t i = 0; i < send_buf.size(); ++i) {
-      NTL::BytesFromZZ(send_serialized.data() + i * common::utils::FIELDSIZE,
-                       NTL::conv<NTL::ZZ>(send_buf[i]), common::utils::FIELDSIZE);
-    }
-
-    std::vector<int> peer_ids;
-    peer_ids.reserve(peers);
-    for (int p = 0; p < helper_id_; ++p) {
-      if (p != id_) {
-        peer_ids.push_back(p);
-      }
-    }
-
-    std::vector<std::thread> send_threads;
-    send_threads.reserve(peer_ids.size());
-    for (int peer : peer_ids) {
-      send_threads.emplace_back([&, peer]() {
-        auto* channel = network_->getSendChannel(peer);
-        channel->send_data(send_serialized.data(), send_serialized.size());
-        channel->flush();
-      });
-    }
-    for (auto& th : send_threads) {
-      th.join();
-    }
-
-    std::vector<OpenPair> sums = local_pairs;
-    maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers);
-
-    std::vector<std::vector<uint8_t>> recv_serialized(
-        peer_ids.size(), std::vector<uint8_t>(serialized_bytes));
-    std::vector<std::thread> recv_threads;
-    recv_threads.reserve(peer_ids.size());
-    for (size_t idx = 0; idx < peer_ids.size(); ++idx) {
-      recv_threads.emplace_back([&, idx]() {
-        auto* channel = network_->getRecvChannel(peer_ids[idx]);
-        channel->recv_data(recv_serialized[idx].data(), recv_serialized[idx].size());
-      });
-    }
-    for (auto& th : recv_threads) {
-      th.join();
-    }
-
-    for (const auto& peer_buf : recv_serialized) {
-      for (size_t i = 0; i < gates; ++i) {
-        const auto d = NTL::ZZFromBytes(peer_buf.data() + (2 * i) * common::utils::FIELDSIZE,
-                                        common::utils::FIELDSIZE);
-        const auto e = NTL::ZZFromBytes(peer_buf.data() + (2 * i + 1) * common::utils::FIELDSIZE,
-                                        common::utils::FIELDSIZE);
-        sums[i].d += NTL::conv<Field>(d);
-        sums[i].e += NTL::conv<Field>(e);
-      }
-    }
-
-    return sums;
-  } else {
-    for (int p = 0; p < helper_id_; ++p) {
-      if (p != id_) {
-        network_->send(p, send_buf.data(), send_buf.size() * common::utils::FIELDSIZE);
-      }
-    }
-    network_->flush();
-
-    std::vector<OpenPair> sums = local_pairs;
-    std::vector<Field> recv_buf(gates * 2);
-    maybeSimulateStep(recv_buf.size() * common::utils::FIELDSIZE * peers);
-    for (int p = 0; p < helper_id_; ++p) {
-      if (p == id_) {
-        continue;
-      }
-      network_->recv(p, recv_buf.data(), recv_buf.size() * common::utils::FIELDSIZE);
-      for (size_t i = 0; i < gates; ++i) {
-        sums[i].d += recv_buf[2 * i];
-        sums[i].e += recv_buf[2 * i + 1];
-      }
-    }
-
-    return sums;
-  }
-}
-
-Field Protocol::openToComputingParties(const Field& local_share) const {
-  if (id_ >= helper_id_) {
-    return Field(0);
-  }
-
-  maybeSimulateStep(common::utils::FIELDSIZE * static_cast<size_t>(helper_id_ - 1));
-  for (int p = 0; p < helper_id_; ++p) {
-    if (p != id_) {
-      network_->send(p, &local_share, common::utils::FIELDSIZE);
-    }
-  }
-  network_->flush();
-
-  Field opened = local_share;
-  Field recv_val = Field(0);
-  maybeSimulateStep(common::utils::FIELDSIZE * static_cast<size_t>(helper_id_ - 1));
-  for (int p = 0; p < helper_id_; ++p) {
-    if (p == id_) {
-      continue;
-    }
-    network_->recv(p, &recv_val, common::utils::FIELDSIZE);
-    opened += recv_val;
-  }
-  return opened;
-}
-
-std::vector<Field> Protocol::openVectorToComputingParties(
-    const std::vector<Field>& local_vec) const {
-  if (id_ >= helper_id_) {
-    return {};
-  }
-  const size_t len = local_vec.size();
-  std::vector<Field> opened = local_vec;
-  if (len == 0) {
-    return opened;
-  }
-  const size_t bytes = len * common::utils::FIELDSIZE;
-  maybeSimulateStep(bytes * static_cast<size_t>(helper_id_ - 1));
-  for (int p = 0; p < helper_id_; ++p) {
-    if (p != id_) {
-      network_->send(p, local_vec.data(), bytes);
-    }
-  }
-  network_->flush();
-
-  std::vector<Field> recv_buf(len, Field(0));
-  maybeSimulateStep(bytes * static_cast<size_t>(helper_id_ - 1));
-  for (int p = 0; p < helper_id_; ++p) {
-    if (p == id_) {
-      continue;
-    }
-    network_->recv(p, recv_buf.data(), bytes);
-    for (size_t i = 0; i < len; ++i) {
-      opened[i] += recv_buf[i];
-    }
-  }
-  return opened;
-}
-
-void Protocol::maybeSimulateStep(size_t aggregate_bytes) const {
-  maybeSimulateLatency();
-  maybeSimulateBandwidth(aggregate_bytes);
-}
-
-void Protocol::maybeSimulateLatency() const {
-  if (config_.sim_latency_ms > 0) {
-    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(
-        config_.sim_latency_ms));
-  }
-}
-
-void Protocol::maybeSimulateBandwidth(size_t bytes) const {
-  if (config_.sim_bandwidth_mbps <= 0 || bytes == 0) {
-    return;
-  }
-  // seconds = bits / (megabits_per_sec * 1e6)
-  const double bits = static_cast<double>(bytes) * 8.0;
-  const double seconds = bits / (config_.sim_bandwidth_mbps * 1e6);
-  if (seconds > 0) {
-    std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
-  }
-}
-
-std::vector<Field> Protocol::online(
-    const std::unordered_map<wire_t, Field>& inputs,
-    const std::vector<TripleShare>& triples) {
-  if (config_.security_model == SecurityModel::kMalicious) {
-    throw std::runtime_error(
-        "Asterisk2.0 malicious model is not implemented yet; use semi-honest mode");
-  }
-
   if (id_ >= helper_id_) {
     return {};
   }
@@ -367,11 +282,11 @@ std::vector<Field> Protocol::online(
     if (!mul_gates.empty()) {
       std::vector<OpenPair> local_pairs(mul_gates.size());
       for (size_t i = 0; i < mul_gates.size(); ++i) {
-        if (mul_idx + i >= triples.size()) {
-          throw std::runtime_error("Insufficient Beaver triples in online phase");
+        if (mul_idx + i >= offline_data.triples.size()) {
+          throw std::runtime_error("Insufficient Beaver triples in mul_online phase");
         }
         const auto* g = mul_gates[i];
-        const auto& t = triples[mul_idx + i];
+        const auto& t = offline_data.triples[mul_idx + i];
         local_pairs[i].d = wire_share_[g->in1] - t.a;
         local_pairs[i].e = wire_share_[g->in2] - t.b;
       }
@@ -379,7 +294,7 @@ std::vector<Field> Protocol::online(
       auto opened = openPairsToComputingParties(local_pairs);
       for (size_t i = 0; i < mul_gates.size(); ++i) {
         const auto* g = mul_gates[i];
-        const auto& t = triples[mul_idx + i];
+        const auto& t = offline_data.triples[mul_idx + i];
         Field out = opened[i].e * t.a + opened[i].d * t.b + t.c;
         if (id_ == 0) {
           out += opened[i].d * opened[i].e;
@@ -398,107 +313,132 @@ std::vector<Field> Protocol::online(
   return outputs;
 }
 
-std::vector<Field> Protocol::probabilisticTruncate(
-    const std::vector<Field>& x_shares, size_t ell_x, size_t m, size_t s) {
+TruncOfflineData Protocol::trunc_offline(size_t batch_size, size_t ell_x, size_t m, size_t s) {
   if (id_ > helper_id_) {
     return {};
   }
   if (m == 0 || m > ell_x) {
-    throw std::runtime_error("probabilisticTruncate requires 0 < m <= ell_x");
+    throw std::runtime_error("trunc_offline requires 0 < m <= ell_x");
   }
   if (ell_x + s + 1 >= 64) {
-    throw std::runtime_error("probabilisticTruncate requires ell_x + s + 1 < 64");
+    throw std::runtime_error("trunc_offline requires ell_x + s + 1 < 64");
   }
+
+  TruncOfflineData off;
+  off.ell_x = ell_x;
+  off.m = m;
+  off.s = s;
+  off.r_share.assign(batch_size, Field(0));
+  off.r0_share.assign(batch_size, Field(0));
+
   const uint64_t bound_r = pow2Bound(ell_x - m + s);
   const uint64_t bound_r0 = pow2Bound(m);
-  const uint64_t two_pow_m = pow2Bound(m);
-  const uint64_t two_pow_lx_minus_1 = pow2Bound(ell_x - 1);
-  const Field lambda_m = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_m)));
 
-  std::vector<Field> out(x_shares.size(), Field(0));
   if (id_ == helper_id_) {
-    for (size_t idx = 0; idx < x_shares.size(); ++idx) {
-      auto hrg = helperTruncRng(seed_, idx);
-      Field r = randomFieldBounded(hrg, bound_r);
-      Field r0 = randomFieldBounded(hrg, bound_r0);
+    for (size_t idx = 0; idx < batch_size; ++idx) {
+      auto helper_prg = makePrg(seed_, helper_id_, idx, PrgLabel::kTruncHelper);
+      Field r = prgFieldBounded(helper_prg, bound_r);
+      Field r0 = prgFieldBounded(helper_prg, bound_r0);
+
       Field sum_r = Field(0);
       Field sum_r0 = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto prg = partyHelperRng(seed_ + 17, i, idx);
-        auto ri = randomFieldBounded(prg, bound_r);
-        auto r0i = randomFieldBounded(prg, bound_r0);
-        sum_r += ri;
-        sum_r0 += r0i;
+        auto pprg = makePrg(seed_, i, idx, PrgLabel::kTruncShare);
+        sum_r += prgFieldBounded(pprg, bound_r);
+        sum_r0 += prgFieldBounded(pprg, bound_r0);
       }
+
       Field pack[2] = {r - sum_r, r0 - sum_r0};
       maybeSimulateStep(2 * common::utils::FIELDSIZE);
       network_->send(nP_ - 1, pack, 2 * common::utils::FIELDSIZE);
     }
     network_->flush();
-    return out;
+    off.ready = true;
+    return off;
   }
 
-  std::vector<Field> r_share(x_shares.size(), Field(0));
-  std::vector<Field> r0_share(x_shares.size(), Field(0));
   if (id_ <= nP_ - 2) {
-    for (size_t idx = 0; idx < x_shares.size(); ++idx) {
-      auto prg = partyHelperRng(seed_ + 17, id_, idx);
-      r_share[idx] = randomFieldBounded(prg, bound_r);
-      r0_share[idx] = randomFieldBounded(prg, bound_r0);
+    for (size_t idx = 0; idx < batch_size; ++idx) {
+      auto pprg = makePrg(seed_, id_, idx, PrgLabel::kTruncShare);
+      off.r_share[idx] = prgFieldBounded(pprg, bound_r);
+      off.r0_share[idx] = prgFieldBounded(pprg, bound_r0);
     }
   } else if (id_ == nP_ - 1) {
-    for (size_t idx = 0; idx < x_shares.size(); ++idx) {
+    for (size_t idx = 0; idx < batch_size; ++idx) {
       Field pack[2];
       maybeSimulateStep(2 * common::utils::FIELDSIZE);
       network_->recv(helper_id_, pack, 2 * common::utils::FIELDSIZE);
-      r_share[idx] = pack[0];
-      r0_share[idx] = pack[1];
+      off.r_share[idx] = pack[0];
+      off.r0_share[idx] = pack[1];
     }
   }
 
+  off.ready = true;
+  return off;
+}
+
+std::vector<Field> Protocol::trunc_online(const std::vector<Field>& x_shares,
+                                          const TruncOfflineData& offline_data) {
+  if (id_ > helper_id_) {
+    return {};
+  }
+  if (!offline_data.ready) {
+    throw std::runtime_error("trunc_online requires ready TruncOfflineData from trunc_offline");
+  }
+  if (offline_data.r_share.size() != x_shares.size() ||
+      offline_data.r0_share.size() != x_shares.size()) {
+    throw std::runtime_error("trunc_online offline mask vector sizes must match input batch size");
+  }
+
+  const uint64_t two_pow_m = pow2Bound(offline_data.m);
+  const uint64_t two_pow_lx_minus_1 = pow2Bound(offline_data.ell_x - 1);
+  const Field lambda_m = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_m)));
+
+  std::vector<Field> out(x_shares.size(), Field(0));
   for (size_t idx = 0; idx < x_shares.size(); ++idx) {
     Field z_i = x_shares[idx] + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1))
                                             : Field(0));
-    Field c_i = z_i + NTL::conv<Field>(NTL::to_ZZ(two_pow_m)) * r_share[idx] + r0_share[idx];
+    Field c_i = z_i + NTL::conv<Field>(NTL::to_ZZ(two_pow_m)) * offline_data.r_share[idx] +
+                offline_data.r0_share[idx];
     Field c = openToComputingParties(c_i);
     uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c));
     uint64_t c0 = c_u64 & (two_pow_m - 1);
-    Field d_i = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) - r0_share[idx];
+    Field d_i = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) -
+                offline_data.r0_share[idx];
     out[idx] = lambda_m * (x_shares[idx] - d_i);
   }
   return out;
 }
 
-std::vector<Field> Protocol::batchedTruncateAll(const Field& x_share, size_t lx,
-                                                size_t s, BGTEZStats* stats) {
+CompareOfflineData Protocol::compare_offline(size_t lx, size_t s, bool force_t,
+                                             bool forced_t_value) {
   if (lx == 0) {
-    throw std::runtime_error("batchedTruncateAll requires lx > 0");
+    throw std::runtime_error("compare_offline requires lx > 0");
   }
   if (lx + s + 1 >= 64) {
-    throw std::runtime_error("batchedTruncateAll requires lx + s + 1 < 64");
-  }
-  if (id_ > helper_id_) {
-    return {};
+    throw std::runtime_error("compare_offline requires lx + s + 1 < 64");
   }
 
-  std::vector<Field> r_share(lx, Field(0));
-  std::vector<Field> r0_share(lx, Field(0));
+  CompareOfflineData out;
+  out.trunc_data.lx = lx;
+  out.trunc_data.s = s;
+  out.trunc_data.r_share.assign(lx, Field(0));
+  out.trunc_data.r0_share.assign(lx, Field(0));
+
   if (id_ == helper_id_) {
     std::vector<Field> pack(2 * lx, Field(0));
     for (size_t j = 1; j <= lx; ++j) {
       const uint64_t bound_r = pow2Bound(lx - j + s);
       const uint64_t bound_r0 = pow2Bound(j);
-      auto hrg = helperTruncRng(seed_ + 31000, j);
-      Field r = randomFieldBounded(hrg, bound_r);
-      Field r0 = randomFieldBounded(hrg, bound_r0);
+      auto helper_prg = makePrg(seed_, helper_id_, j, PrgLabel::kTruncHelper);
+      Field r = prgFieldBounded(helper_prg, bound_r);
+      Field r0 = prgFieldBounded(helper_prg, bound_r0);
       Field sum_r = Field(0);
       Field sum_r0 = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto prg = partyHelperRng(seed_ + 32000, i, j);
-        auto ri = randomFieldBounded(prg, bound_r);
-        auto r0i = randomFieldBounded(prg, bound_r0);
-        sum_r += ri;
-        sum_r0 += r0i;
+        auto pprg = makePrg(seed_, i, j, PrgLabel::kTruncShare);
+        sum_r += prgFieldBounded(pprg, bound_r);
+        sum_r0 += prgFieldBounded(pprg, bound_r0);
       }
       pack[2 * (j - 1)] = r - sum_r;
       pack[2 * (j - 1) + 1] = r0 - sum_r0;
@@ -506,151 +446,171 @@ std::vector<Field> Protocol::batchedTruncateAll(const Field& x_share, size_t lx,
     maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
     network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
     network_->flush();
-    return {};
-  }
-
-  if (id_ <= nP_ - 2) {
+  } else if (id_ <= nP_ - 2) {
     for (size_t j = 1; j <= lx; ++j) {
       const uint64_t bound_r = pow2Bound(lx - j + s);
       const uint64_t bound_r0 = pow2Bound(j);
-      auto prg = partyHelperRng(seed_ + 32000, id_, j);
-      r_share[j - 1] = randomFieldBounded(prg, bound_r);
-      r0_share[j - 1] = randomFieldBounded(prg, bound_r0);
+      auto pprg = makePrg(seed_, id_, j, PrgLabel::kTruncShare);
+      out.trunc_data.r_share[j - 1] = prgFieldBounded(pprg, bound_r);
+      out.trunc_data.r0_share[j - 1] = prgFieldBounded(pprg, bound_r0);
     }
   } else if (id_ == nP_ - 1) {
     std::vector<Field> pack(2 * lx, Field(0));
     maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
     network_->recv(helper_id_, pack.data(), pack.size() * common::utils::FIELDSIZE);
     for (size_t j = 0; j < lx; ++j) {
-      r_share[j] = pack[2 * j];
-      r0_share[j] = pack[2 * j + 1];
+      out.trunc_data.r_share[j] = pack[2 * j];
+      out.trunc_data.r0_share[j] = pack[2 * j + 1];
     }
   }
 
+  out.trunc_data.ready = true;
+
+  out.cmp_data.rho.assign(lx + 2, Field(0));
+  for (size_t i = 0; i < out.cmp_data.rho.size(); ++i) {
+    auto pprg = makePrg(seed_, 0, i + 1, PrgLabel::kCmpMask);
+    out.cmp_data.rho[i] = prgNonZeroField(pprg);
+  }
+
+  out.cmp_data.permutation.resize(lx + 2);
+  std::iota(out.cmp_data.permutation.begin(), out.cmp_data.permutation.end(), 0);
+  auto shuffle_prg = makePrg(seed_, 0, lx, PrgLabel::kCmpShuffle);
+  for (size_t i = out.cmp_data.permutation.size(); i > 1; --i) {
+    size_t j = static_cast<size_t>(prgUint64(shuffle_prg) % i);
+    std::swap(out.cmp_data.permutation[i - 1], out.cmp_data.permutation[j]);
+  }
+
+  if (force_t) {
+    out.cmp_data.t = forced_t_value;
+  } else {
+    auto t_prg = makePrg(seed_, 0, lx + 1, PrgLabel::kCmpBit);
+    out.cmp_data.t = prgBit(t_prg);
+  }
+
+  out.cmp_data.ready = true;
+  out.ready = true;
+  return out;
+}
+
+Field Protocol::compare_online(const Field& x_share, const CompareOfflineData& offline_data,
+                               BGTEZStats* stats) {
+  if (!offline_data.ready || !offline_data.trunc_data.ready || !offline_data.cmp_data.ready) {
+    throw std::runtime_error("compare_online requires ready CompareOfflineData from compare_offline");
+  }
+  const size_t lx = offline_data.trunc_data.lx;
+  const size_t s = offline_data.trunc_data.s;
+  if (lx == 0 || lx + s + 1 >= 64) {
+    throw std::runtime_error("compare_online got invalid offline truncation parameters");
+  }
+
+  if (id_ > helper_id_) {
+    return Field(0);
+  }
+
+  if (id_ == helper_id_) {
+    const size_t helper_payload_len = lx + 3;  // (v* and v_j) plus hat_x.
+    std::vector<int> peers;
+    peers.reserve(static_cast<size_t>(helper_id_));
+    for (int p = 0; p < helper_id_; ++p) {
+      peers.push_back(p);
+    }
+    // Round 2 receive (parallelized).
+    const size_t bytes = helper_payload_len * common::utils::FIELDSIZE;
+    std::vector<std::vector<uint8_t>> recv_payloads(
+        peers.size(), std::vector<uint8_t>(bytes, 0));
+    std::vector<std::thread> recv_threads;
+    recv_threads.reserve(peers.size());
+    for (size_t i = 0; i < peers.size(); ++i) {
+      recv_threads.emplace_back([&, i]() {
+        auto* channel = network_->getRecvChannel(peers[i]);
+        channel->recv_data(recv_payloads[i].data(), bytes);
+      });
+    }
+    for (auto& th : recv_threads) {
+      th.join();
+    }
+    std::vector<Field> sum(helper_payload_len, Field(0));
+    for (const auto& buf : recv_payloads) {
+      auto vals = deserializeFieldVector(buf);
+      for (size_t i = 0; i < vals.size(); ++i) {
+        sum[i] += vals[i];
+      }
+    }
+
+    bool any_zero = false;
+    for (const auto& val : sum) {
+      if (val == Field(0)) {
+        any_zero = true;
+        break;
+      }
+    }
+    const uint64_t opened_raw = NTL::conv<uint64_t>(NTL::rep(sum.back()));
+    int64_t opened_x = static_cast<int64_t>(opened_raw);
+    if (opened_raw > (kPrime64Minus59 / 2ULL)) {
+      opened_x = static_cast<int64_t>(opened_raw - kPrime64Minus59);
+    }
+    Field bit = (opened_x >= 0 || any_zero) ? Field(1) : Field(0);
+
+    std::vector<Field> back(helper_id_, Field(0));
+    Field partial = Field(0);
+    for (int p = 0; p <= helper_id_ - 2; ++p) {
+      auto prg = makePrg(seed_, helper_id_, static_cast<uint64_t>(p), PrgLabel::kCmpHelperShare);
+      back[p] = prgField(prg);
+      partial += back[p];
+    }
+    back[helper_id_ - 1] = bit - partial;
+
+    // Round 3 send (parallelized).
+    std::vector<std::thread> send_threads;
+    send_threads.reserve(peers.size());
+    for (int peer : peers) {
+      send_threads.emplace_back([&, peer]() {
+        auto* channel = network_->getSendChannel(peer);
+        std::vector<uint8_t> payload(common::utils::FIELDSIZE);
+        NTL::BytesFromZZ(payload.data(), NTL::conv<NTL::ZZ>(back[peer]), common::utils::FIELDSIZE);
+        channel->send_data(payload.data(), payload.size());
+        channel->flush();
+      });
+    }
+    for (auto& th : send_threads) {
+      th.join();
+    }
+    return Field(0);
+  }
+
+  const bool t = offline_data.cmp_data.t;
+  Field hat_x = t ? -x_share : x_share;
+  Field u_star = (id_ == 0) ? (t ? Field(-1) : Field(1)) : Field(0);
+  Field u0 = hat_x;
+
+  // Round 1 (batched): one opening for all truncation levels.
   std::vector<Field> c_local(lx, Field(0));
   for (size_t j = 1; j <= lx; ++j) {
     const uint64_t two_pow_j = pow2Bound(j);
     const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
-    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
-    c_local[j - 1] =
-        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * r_share[j - 1] + r0_share[j - 1];
+    Field z = hat_x + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
+    c_local[j - 1] = z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) *
+                             offline_data.trunc_data.r_share[j - 1] +
+                     offline_data.trunc_data.r0_share[j - 1];
   }
   auto c_open = openVectorToComputingParties(c_local);
   if (stats != nullptr) {
     stats->batched_open_calls += 1;
   }
   if (c_open.size() != lx) {
-    throw std::runtime_error("batchedTruncateAll reconstructed vector size mismatch");
+    throw std::runtime_error("compare_online batched opening size mismatch");
   }
 
-  std::vector<Field> u(lx, Field(0));
+  std::vector<Field> u_trunc(lx, Field(0));
   for (size_t j = 1; j <= lx; ++j) {
     const uint64_t two_pow_j = pow2Bound(j);
     const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open[j - 1]));
     const uint64_t c0 = c_u64 & (two_pow_j - 1);
-    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) - r0_share[j - 1];
+    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) -
+              offline_data.trunc_data.r0_share[j - 1];
     const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
-    u[j - 1] = inv2pow * (x_share - d);
+    u_trunc[j - 1] = inv2pow * (hat_x - d);
   }
-  return u;
-}
-
-std::vector<Field> Protocol::serialTruncateAllForTesting(const Field& x_share, size_t lx, size_t s,
-                                                         BGTEZStats* stats) {
-  if (lx == 0) {
-    throw std::runtime_error("serialTruncateAllForTesting requires lx > 0");
-  }
-  if (lx + s + 1 >= 64) {
-    throw std::runtime_error("serialTruncateAllForTesting requires lx + s + 1 < 64");
-  }
-  if (id_ > helper_id_) {
-    return {};
-  }
-
-  std::vector<Field> r_share(lx, Field(0));
-  std::vector<Field> r0_share(lx, Field(0));
-  if (id_ == helper_id_) {
-    std::vector<Field> pack(2 * lx, Field(0));
-    for (size_t j = 1; j <= lx; ++j) {
-      const uint64_t bound_r = pow2Bound(lx - j + s);
-      const uint64_t bound_r0 = pow2Bound(j);
-      auto hrg = helperTruncRng(seed_ + 31000, j);
-      Field r = randomFieldBounded(hrg, bound_r);
-      Field r0 = randomFieldBounded(hrg, bound_r0);
-      Field sum_r = Field(0);
-      Field sum_r0 = Field(0);
-      for (int i = 0; i <= nP_ - 2; ++i) {
-        auto prg = partyHelperRng(seed_ + 32000, i, j);
-        auto ri = randomFieldBounded(prg, bound_r);
-        auto r0i = randomFieldBounded(prg, bound_r0);
-        sum_r += ri;
-        sum_r0 += r0i;
-      }
-      pack[2 * (j - 1)] = r - sum_r;
-      pack[2 * (j - 1) + 1] = r0 - sum_r0;
-    }
-    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
-    network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
-    network_->flush();
-    return {};
-  }
-
-  if (id_ <= nP_ - 2) {
-    for (size_t j = 1; j <= lx; ++j) {
-      const uint64_t bound_r = pow2Bound(lx - j + s);
-      const uint64_t bound_r0 = pow2Bound(j);
-      auto prg = partyHelperRng(seed_ + 32000, id_, j);
-      r_share[j - 1] = randomFieldBounded(prg, bound_r);
-      r0_share[j - 1] = randomFieldBounded(prg, bound_r0);
-    }
-  } else if (id_ == nP_ - 1) {
-    std::vector<Field> pack(2 * lx, Field(0));
-    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
-    network_->recv(helper_id_, pack.data(), pack.size() * common::utils::FIELDSIZE);
-    for (size_t j = 0; j < lx; ++j) {
-      r_share[j] = pack[2 * j];
-      r0_share[j] = pack[2 * j + 1];
-    }
-  }
-
-  std::vector<Field> u(lx, Field(0));
-  for (size_t j = 1; j <= lx; ++j) {
-    const uint64_t two_pow_j = pow2Bound(j);
-    const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
-    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
-    Field c_local =
-        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * r_share[j - 1] + r0_share[j - 1];
-    Field c_open = openToComputingParties(c_local);
-    const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open));
-    const uint64_t c0 = c_u64 & (two_pow_j - 1);
-    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) - r0_share[j - 1];
-    const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
-    u[j - 1] = inv2pow * (x_share - d);
-    if (stats != nullptr) {
-      stats->batched_open_calls += 1;
-    }
-  }
-  return u;
-}
-
-Field Protocol::bgtezCompare(const Field& x_share, size_t lx, size_t s, bool force_t,
-                             bool forced_t_value, BGTEZStats* stats) {
-  if (lx == 0) {
-    throw std::runtime_error("bgtezCompare requires lx > 0");
-  }
-  if (lx + s + 1 >= 64) {
-    throw std::runtime_error("bgtezCompare requires lx + s + 1 < 64");
-  }
-  if (id_ > helper_id_) {
-    return Field(0);
-  }
-
-  const bool t = force_t ? forced_t_value : ((seed_ & 1) == 1);
-  Field hat_x = t ? -x_share : x_share;
-  Field u_star = (id_ == 0) ? (t ? Field(-1) : Field(1)) : Field(0);
-  Field u0 = hat_x;
-
-  auto u_trunc = batchedTruncateAll(hat_x, lx, s, stats);
 
   std::vector<Field> u_all(lx + 1, Field(0));
   if (id_ < helper_id_) {
@@ -671,81 +631,228 @@ Field Protocol::bgtezCompare(const Field& x_share, size_t lx, size_t s, bool for
     v[j] = sum - one_share;
   }
 
-  std::vector<Field> rho(lx + 2, Field(0));
-  for (size_t i = 0; i < rho.size(); ++i) {
-    auto prg = partyHelperRng(seed_ + 41000, 0, i + 1);
-    rho[i] = randomField(prg);
-    if (rho[i] == Field(0)) {
-      rho[i] = Field(1);
-    }
+  if (offline_data.cmp_data.rho.size() != lx + 2 ||
+      offline_data.cmp_data.permutation.size() != lx + 2) {
+    throw std::runtime_error("compare_online comparison mask/permutation size mismatch");
   }
 
   std::vector<Field> candidates(lx + 2, Field(0));
-  candidates[0] = rho[0] * v_star;
+  candidates[0] = offline_data.cmp_data.rho[0] * v_star;
   for (size_t j = 0; j <= lx; ++j) {
-    candidates[j + 1] = rho[j + 1] * v[j];
+    candidates[j + 1] = offline_data.cmp_data.rho[j + 1] * v[j];
   }
-  std::vector<size_t> perm(candidates.size());
-  std::iota(perm.begin(), perm.end(), 0);
-  std::mt19937_64 shuf_rng(static_cast<uint64_t>(seed_) * 17ULL + 5ULL);
-  std::shuffle(perm.begin(), perm.end(), shuf_rng);
+
   std::vector<Field> shuffled(candidates.size(), Field(0));
   for (size_t i = 0; i < candidates.size(); ++i) {
-    shuffled[i] = candidates[perm[i]];
+    shuffled[i] = candidates[offline_data.cmp_data.permutation[i]];
   }
   std::vector<Field> helper_payload = shuffled;
   helper_payload.push_back(hat_x);
 
-  // round 2: send shuffled shares to helper
-  const size_t bytes = helper_payload.size() * common::utils::FIELDSIZE;
-  maybeSimulateStep(bytes);
-  network_->send(helper_id_, helper_payload.data(), bytes);
-  network_->flush();
+  // Round 2: computing parties send shuffled candidate shares to helper.
+  if (id_ < helper_id_) {
+    const auto payload = serializeFieldVector(helper_payload);
+    maybeSimulateStep(payload.size());
+    auto* channel = network_->getSendChannel(helper_id_);
+    channel->send_data(payload.data(), payload.size());
+    channel->flush();
+  }
 
-  // round 3: helper shares back result bit
+  // Round 3: helper sends back secret shares of comparison bit.
   Field bit_share = Field(0);
-  if (id_ == helper_id_) {
-    std::vector<Field> recv(helper_payload.size(), Field(0));
-    std::vector<Field> sum(helper_payload.size(), Field(0));
-    for (int p = 0; p < helper_id_; ++p) {
-      network_->recv(p, recv.data(), bytes);
-      for (size_t i = 0; i < shuffled.size(); ++i) {
-        sum[i] += recv[i];
-      }
-      sum.back() += recv.back();
+  std::vector<uint8_t> recv_payload(common::utils::FIELDSIZE);
+  auto* recv_channel = network_->getRecvChannel(helper_id_);
+  recv_channel->recv_data(recv_payload.data(), recv_payload.size());
+  bit_share = NTL::conv<Field>(
+      NTL::ZZFromBytes(recv_payload.data(), common::utils::FIELDSIZE));
+  Field t_share = (id_ == 0 && t) ? Field(1) : Field(0);
+  return t_share + bit_share - Field(2) * (t ? bit_share : Field(0));
+}
+
+std::vector<TripleShare> Protocol::offline() {
+  return mul_offline().triples;
+}
+
+std::vector<Field> Protocol::online(const std::unordered_map<wire_t, Field>& inputs,
+                                    const std::vector<TripleShare>& triples) {
+  MulOfflineData off;
+  off.triples = triples;
+  off.ready = true;
+  return mul_online(inputs, off);
+}
+
+std::vector<Field> Protocol::probabilisticTruncate(const std::vector<Field>& x_shares, size_t ell_x,
+                                                   size_t m, size_t s) {
+  auto off = trunc_offline(x_shares.size(), ell_x, m, s);
+  return trunc_online(x_shares, off);
+}
+
+std::vector<Protocol::OpenPair> Protocol::openPairsToComputingParties(
+    const std::vector<OpenPair>& local_pairs) const {
+  if (id_ >= helper_id_) {
+    return {};
+  }
+
+  std::vector<Field> send_buf(local_pairs.size() * 2);
+  for (size_t i = 0; i < local_pairs.size(); ++i) {
+    send_buf[2 * i] = local_pairs[i].d;
+    send_buf[2 * i + 1] = local_pairs[i].e;
+  }
+
+  const auto peers = computingPeerIdsExcludingSelf();
+  maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers.size());
+  sendFieldVectorToPeers(peers, send_buf);
+
+  std::vector<OpenPair> sums = local_pairs;
+  maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers.size());
+  auto recv_all = recvFieldVectorsFromPeers(peers, send_buf.size());
+  for (const auto& recv_buf : recv_all) {
+    for (size_t i = 0; i < local_pairs.size(); ++i) {
+      sums[i].d += recv_buf[2 * i];
+      sums[i].e += recv_buf[2 * i + 1];
     }
-    bool any_zero = false;
-    for (const auto& val : sum) {
-      if (val == Field(0)) {
-        any_zero = true;
-        break;
-      }
-    }
-    const uint64_t opened_raw = NTL::conv<uint64_t>(NTL::rep(sum.back()));
-    const uint64_t prime = 18446744073709551557ULL;
-    int64_t opened_x = static_cast<int64_t>(opened_raw);
-    if (opened_raw > (prime / 2ULL)) {
-      opened_x = static_cast<int64_t>(opened_raw - prime);
-    }
-    Field bit = (opened_x >= 0 || any_zero) ? Field(1) : Field(0);
-    std::vector<Field> back(helper_id_, Field(0));
-    Field partial = Field(0);
-    for (int p = 0; p <= helper_id_ - 2; ++p) {
-      auto rg = helperTruncRng(seed_ + 42000, static_cast<size_t>(p));
-      back[p] = randomField(rg);
-      partial += back[p];
-    }
-    back[helper_id_ - 1] = bit - partial;
-    for (int p = 0; p < helper_id_; ++p) {
-      network_->send(p, &back[p], common::utils::FIELDSIZE);
-    }
-    network_->flush();
+  }
+  return sums;
+}
+
+Field Protocol::openToComputingParties(const Field& local_share) const {
+  if (id_ >= helper_id_) {
     return Field(0);
   }
 
-  network_->recv(helper_id_, &bit_share, common::utils::FIELDSIZE);
-  Field t_share = (id_ == 0 && t) ? Field(1) : Field(0);
-  return t_share + bit_share - Field(2) * ((t) ? bit_share : Field(0));
+  const auto peers = computingPeerIdsExcludingSelf();
+  std::vector<Field> local_vec = {local_share};
+  maybeSimulateStep(common::utils::FIELDSIZE * peers.size());
+  sendFieldVectorToPeers(peers, local_vec);
+
+  Field opened = local_share;
+  maybeSimulateStep(common::utils::FIELDSIZE * peers.size());
+  auto recv_all = recvFieldVectorsFromPeers(peers, 1);
+  for (const auto& recv_vec : recv_all) {
+    opened += recv_vec[0];
+  }
+  return opened;
+}
+
+std::vector<Field> Protocol::openVectorToComputingParties(const std::vector<Field>& local_vec) const {
+  if (id_ >= helper_id_) {
+    return {};
+  }
+  if (local_vec.empty()) {
+    return {};
+  }
+
+  const auto peers = computingPeerIdsExcludingSelf();
+  std::vector<Field> opened = local_vec;
+  const size_t bytes = local_vec.size() * common::utils::FIELDSIZE;
+  maybeSimulateStep(bytes * peers.size());
+  sendFieldVectorToPeers(peers, local_vec);
+
+  maybeSimulateStep(bytes * peers.size());
+  auto recv_all = recvFieldVectorsFromPeers(peers, local_vec.size());
+  for (const auto& recv_buf : recv_all) {
+    for (size_t i = 0; i < local_vec.size(); ++i) {
+      opened[i] += recv_buf[i];
+    }
+  }
+  return opened;
+}
+
+std::vector<Field> Protocol::batchedTruncateAll(const Field& x_share, size_t lx,
+                                                size_t s, BGTEZStats* stats) {
+  auto off = compare_offline(lx, s);
+  if (id_ >= helper_id_) {
+    return {};
+  }
+  if (!off.trunc_data.ready) {
+    throw std::runtime_error("batchedTruncateAll requires ready truncation offline data");
+  }
+  std::vector<Field> c_local(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
+    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
+    c_local[j - 1] =
+        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * off.trunc_data.r_share[j - 1] +
+        off.trunc_data.r0_share[j - 1];
+  }
+  auto c_open = openVectorToComputingParties(c_local);
+  if (stats != nullptr) {
+    stats->batched_open_calls += 1;
+  }
+
+  std::vector<Field> u(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open[j - 1]));
+    const uint64_t c0 = c_u64 & (two_pow_j - 1);
+    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) -
+              off.trunc_data.r0_share[j - 1];
+    const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
+    u[j - 1] = inv2pow * (x_share - d);
+  }
+  return u;
+}
+
+std::vector<Field> Protocol::serialTruncateAllForTesting(const Field& x_share, size_t lx, size_t s,
+                                                         BGTEZStats* stats) {
+  if (lx == 0) {
+    throw std::runtime_error("serialTruncateAllForTesting requires lx > 0");
+  }
+  auto cmp_off = compare_offline(lx, s);
+  if (id_ >= helper_id_) {
+    return {};
+  }
+
+  std::vector<Field> out(lx, Field(0));
+  for (size_t j = 1; j <= lx; ++j) {
+    const uint64_t two_pow_j = pow2Bound(j);
+    const uint64_t two_pow_lx_minus_1 = pow2Bound(lx - 1);
+    Field z = x_share + ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(two_pow_lx_minus_1)) : Field(0));
+    Field c_local =
+        z + NTL::conv<Field>(NTL::to_ZZ(two_pow_j)) * cmp_off.trunc_data.r_share[j - 1] +
+        cmp_off.trunc_data.r0_share[j - 1];
+    Field c_open = openToComputingParties(c_local);
+    const uint64_t c_u64 = NTL::conv<uint64_t>(NTL::rep(c_open));
+    const uint64_t c0 = c_u64 & (two_pow_j - 1);
+    Field d = ((id_ == 0) ? NTL::conv<Field>(NTL::to_ZZ(c0)) : Field(0)) -
+              cmp_off.trunc_data.r0_share[j - 1];
+    const Field inv2pow = inv(NTL::conv<Field>(NTL::to_ZZ(two_pow_j)));
+    out[j - 1] = inv2pow * (x_share - d);
+    if (stats != nullptr) {
+      stats->batched_open_calls += 1;
+    }
+  }
+  return out;
+}
+
+Field Protocol::bgtezCompare(const Field& x_share, size_t lx, size_t s, bool force_t,
+                             bool forced_t_value, BGTEZStats* stats) {
+  auto off = compare_offline(lx, s, force_t, forced_t_value);
+  return compare_online(x_share, off, stats);
+}
+
+void Protocol::maybeSimulateStep(size_t aggregate_bytes) const {
+  maybeSimulateLatency();
+  maybeSimulateBandwidth(aggregate_bytes);
+}
+
+void Protocol::maybeSimulateLatency() const {
+  if (config_.sim_latency_ms > 0) {
+    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(
+        config_.sim_latency_ms));
+  }
+}
+
+void Protocol::maybeSimulateBandwidth(size_t bytes) const {
+  if (config_.sim_bandwidth_mbps <= 0 || bytes == 0) {
+    return;
+  }
+  const double bits = static_cast<double>(bytes) * 8.0;
+  const double seconds = bits / (config_.sim_bandwidth_mbps * 1e6);
+  if (seconds > 0) {
+    std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+  }
 }
 
 }  // namespace asterisk2
