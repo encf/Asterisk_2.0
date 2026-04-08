@@ -30,6 +30,21 @@ done
 wait
 ```
 
+## Multiplication correctness check (Asterisk2.0)
+
+`asterisk2_mpc` now supports `--dump-output-shares`, which writes each computing
+party's local output shares into JSON (`local_output_shares`). You can validate
+that reconstructed outputs match the expected chain-multiplication value with:
+
+```sh
+python3 scripts/verify_asterisk2_mul.py --depth 10 --out-dir /tmp/a2_mul_verify
+```
+
+Validation rule used by the script:
+- benchmark inputs are fixed as party-0=`5`, others=`0` for every input wire;
+- clear input per wire is therefore `5`;
+- after depth `d` multiplication layers, expected output is `5^(2^d) mod p`.
+
 ## Results (ms / bytes / comm-count)
 - Asterisk2.0 computing parties average (after batched-open optimization)
   - offline: `0.423747 ms`

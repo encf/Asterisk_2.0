@@ -230,6 +230,16 @@ for pid in 0 1 2 3; do
 done
 wait
 
+# 可选：导出每个计算方的本地输出 share（用于正确性校验）
+for pid in 0 1 2 3; do
+  ./benchmarks/asterisk2_mpc --localhost -n 3 -p "$pid" -g 1 -d 10 -r 1 \
+    --security-model semi-honest --dump-output-shares \
+    -o /tmp/a2_mul_check_p"$pid".json &
+done
+wait
+# 一键重建输出并校验（期望值按 5^(2^d) mod p 计算）
+python3 scripts/verify_asterisk2_mul.py --depth 10 --out-dir /tmp/a2_mul_verify
+
 # Asterisk baseline: offline + online split
 for pid in 0 1 2 3; do
   ./benchmarks/asterisk_offline --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 -o asterisk_offline_chain100_p"$pid".json &

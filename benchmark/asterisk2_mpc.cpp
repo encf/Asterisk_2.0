@@ -5,6 +5,7 @@
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <memory>
+#include <vector>
 
 #include "utils.h"
 #include "Asterisk2.0/protocol.h"
@@ -57,6 +58,7 @@ void benchmark(const bpo::variables_map& opts) {
   auto latency_ms = opts["latency-ms"].as<double>();
   auto net_model =
       common::utils::resolveNetworkCostModel(net_preset, bandwidth_bps, latency_ms);
+  auto dump_output_shares = opts["dump-output-shares"].as<bool>();
 
   asterisk2::SecurityModel security_model = asterisk2::SecurityModel::kSemiHonest;
   if (security_model_str == "malicious") {
@@ -127,8 +129,9 @@ void benchmark(const bpo::variables_map& opts) {
 
     network->sync();
     StatsPoint online_start(*network);
+    std::vector<Field> local_outputs;
     if (pid < nP) {
-      (void)proto.online(inputs, triples);
+      local_outputs = proto.online(inputs, triples);
     }
     StatsPoint online_end(*network);
 
@@ -173,7 +176,7 @@ void benchmark(const bpo::variables_map& opts) {
       std::cout << "comm_model_total_ms: " << comm_model_total_ms << "\n";
     }
 
-    output_data["benchmarks"].push_back({
+    json row = {
         {"offline", offline_bench},
         {"online", online_bench},
         {"offline_bytes", offline_bytes},
@@ -185,7 +188,15 @@ void benchmark(const bpo::variables_map& opts) {
         {"comm_model_total_ms", comm_model_total_ms},
         // keep online_comm_count for compatibility; now it denotes rounds.
         {"online_comm_count", online_comm_rounds},
-    });
+    };
+    if (pid < nP && dump_output_shares) {
+      json shares = json::array();
+      for (const auto& val : local_outputs) {
+        shares.push_back(NTL::conv<uint64_t>(NTL::rep(val)));
+      }
+      row["local_output_shares"] = shares;
+    }
+    output_data["benchmarks"].push_back(std::move(row));
   }
 
   if (opts.count("output") != 0) {
@@ -216,6 +227,8 @@ bpo::options_description programOptions() {
        "Communication-cost model bandwidth in bps (overrides preset when >0).")
       ("latency-ms", bpo::value<double>()->default_value(0.0),
        "Communication-cost model latency in ms (overrides preset when >0).")
+      ("dump-output-shares", bpo::bool_switch()->default_value(false),
+       "Dump local output shares in benchmark JSON for correctness validation.")
       ("port", bpo::value<int>()->default_value(10000), "Base port for networking.")
       ("output,o", bpo::value<std::string>(), "File to save benchmarks.")
       ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of repetitions.");
