@@ -18,7 +18,7 @@
 
 ## 0. 当前基线（必须先确认）
 
-- 现状：`mul_offline()` 在 malicious 模式直接抛异常，尚未实现恶意协议路径。
+- 现状（已更新）：`mul_offline()` / `mul_online()` 在 malicious 模式已具备可运行分派路径，不再直接抛异常；当前仍缺 Ver-DH、deferred batch verify、fair release 与 trunc/compare 的 malicious 专属验证链路。
 - 参考入口：
   - `src/Asterisk2.0/protocol.h`
   - `src/Asterisk2.0/protocol.cpp`

@@ -152,6 +152,8 @@ This starts party IDs `0..3` locally and stores logs under:
 
 - 详细的恶意安全实现任务分解见：`docs/asterisk2_malicious_implementation_plan.md`。
 - 该路线图把实现拆分为认证分享、延迟验证、公平输出释放、恶意乘法、trunc/compare 升级、benchmark 与测试。
+- 当前已落地：malicious 乘法离线/在线分派、`Δ`/`Δ^{-1}` key-material 准备与一致性检查、`Pi_MACSetup-DH` 与显式 `KeyManager`。
+- 当前仍在开发：Ver-DH、deferred batch verify、fair release、trunc/compare 的 malicious 验证管线。
 
 ## Usage
 A short description of the compiled programs is given below.
