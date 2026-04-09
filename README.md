@@ -148,6 +148,11 @@ After building benchmarks, run:
 This starts party IDs `0..3` locally and stores logs under:
 `./run_logs/chain_mul_10/`.
 
+## Asterisk2.0 malicious roadmap
+
+- 详细的恶意安全实现任务分解见：`docs/asterisk2_malicious_implementation_plan.md`。
+- 该路线图把实现拆分为认证分享、延迟验证、公平输出释放、恶意乘法、trunc/compare 升级、benchmark 与测试。
+
 ## Usage
 A short description of the compiled programs is given below.
 All of them provide detailed usage description on using the `--help` option.
