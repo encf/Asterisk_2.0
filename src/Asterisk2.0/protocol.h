@@ -130,6 +130,7 @@ class Protocol {
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
   std::vector<Field> mul_online_malicious(
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
+  void verifyMaliciousKeyMaterial(const MulOfflineData& offline_data) const;
   std::vector<std::vector<Field>> recvFieldVectorsFromPeers(const std::vector<int>& peers,
                                                             size_t len) const;
   void sendFieldVectorToPeers(const std::vector<int>& peers, const std::vector<Field>& data) const;

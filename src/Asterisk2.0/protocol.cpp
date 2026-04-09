@@ -369,9 +369,26 @@ std::vector<Field> Protocol::mul_online_semi_honest(
 
 std::vector<Field> Protocol::mul_online_malicious(
     const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
-  // Phase-1 malicious path intentionally reuses semi-honest online core while
-  // keeping the branch separated for follow-up Ver-DH/deferred-verify logic.
+  // Next-phase bootstrap: verify malicious key material shares with helper.
+  verifyMaliciousKeyMaterial(offline_data);
+  // Current malicious online still reuses semi-honest arithmetic kernel.
   return mul_online_semi_honest(inputs, offline_data);
+}
+
+void Protocol::verifyMaliciousKeyMaterial(const MulOfflineData& offline_data) const {
+  if (!offline_data.ready) {
+    throw std::runtime_error("malicious verify requires ready MulOfflineData");
+  }
+
+  if (id_ >= helper_id_) {
+    return;
+  }
+
+  const Field delta = openToComputingParties(offline_data.delta_share);
+  const Field delta_inv = openToComputingParties(offline_data.delta_inv_share);
+  if (delta == Field(0) || delta * delta_inv != Field(1)) {
+    throw std::runtime_error("malicious key-material consistency check failed");
+  }
 }
 
 TruncOfflineData Protocol::trunc_offline(size_t batch_size, size_t ell_x, size_t m, size_t s) {
