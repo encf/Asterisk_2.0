@@ -40,6 +40,13 @@ emp::PRG makePrg(int seed, int party_id, uint64_t idx, PrgLabel label) {
   return emp::PRG(&key, 0);
 }
 
+emp::PRG makePrgFromPairwiseKey(const PairwiseKey& pairwise_key, uint64_t idx, PrgLabel label) {
+  const uint64_t lo = pairwise_key.lo ^ idx;
+  const uint64_t hi = pairwise_key.hi ^ static_cast<uint64_t>(label);
+  block key = emp::makeBlock(hi, lo);
+  return emp::PRG(&key, 0);
+}
+
 uint64_t prgUint64(emp::PRG& prg) {
   uint64_t v = 0;
   prg.random_data(&v, sizeof(v));
@@ -103,6 +110,7 @@ Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
       id_(id),
       helper_id_(nP),
       seed_(seed),
+      key_manager_(nP, id, seed),
       config_(config),
       network_(std::move(network)),
       circ_(std::move(circ)),
@@ -195,8 +203,9 @@ MulOfflineData Protocol::mul_offline_semi_honest(const std::vector<FIn2Gate>& mu
   MulOfflineData out;
   out.triples.resize(mul_gates.size());
   if (id_ <= nP_ - 2) {
+    const auto pairwise_key = key_manager_.keyWithHelper();
     for (size_t g = 0; g < mul_gates.size(); ++g) {
-      auto prg = makePrg(seed_, id_, g, PrgLabel::kMulShare);
+      auto prg = makePrgFromPairwiseKey(pairwise_key, g, PrgLabel::kMulShare);
       out.triples[g].a = prgField(prg);
       out.triples[g].b = prgField(prg);
       out.triples[g].c = prgField(prg);
@@ -216,7 +225,7 @@ MulOfflineData Protocol::mul_offline_semi_honest(const std::vector<FIn2Gate>& mu
       Field sum_b = Field(0);
       Field sum_c = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto pprg = makePrg(seed_, i, g, PrgLabel::kMulShare);
+        auto pprg = makePrgFromPairwiseKey(key_manager_.keyForParty(i), g, PrgLabel::kMulShare);
         sum_a += prgField(pprg);
         sum_b += prgField(pprg);
         sum_c += prgField(pprg);
@@ -249,7 +258,8 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
   // additive shares of global MAC key material [Δ], [Δ^{-1}] for later Ver-DH.
   MulOfflineData out = mul_offline_semi_honest(mul_gates);
   if (id_ <= nP_ - 2) {
-    auto delta_prg = makePrg(seed_, id_, 0, PrgLabel::kMaliciousDeltaShare);
+    auto delta_prg =
+        makePrgFromPairwiseKey(key_manager_.keyWithHelper(), 0, PrgLabel::kMaliciousDeltaShare);
     out.delta_share = prgField(delta_prg);
     out.delta_inv_share = prgField(delta_prg);
     return out;
@@ -263,7 +273,8 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
     Field sum_delta = Field(0);
     Field sum_delta_inv = Field(0);
     for (int i = 0; i <= nP_ - 2; ++i) {
-      auto pprg = makePrg(seed_, i, 0, PrgLabel::kMaliciousDeltaShare);
+      auto pprg = makePrgFromPairwiseKey(key_manager_.keyForParty(i), 0,
+                                         PrgLabel::kMaliciousDeltaShare);
       sum_delta += prgField(pprg);
       sum_delta_inv += prgField(pprg);
     }
@@ -463,7 +474,8 @@ TruncOfflineData Protocol::trunc_offline(size_t batch_size, size_t ell_x, size_t
       Field sum_r = Field(0);
       Field sum_r0 = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto pprg = makePrg(seed_, i, idx, PrgLabel::kTruncShare);
+        auto pprg = makePrgFromPairwiseKey(key_manager_.keyForParty(i), idx,
+                                           PrgLabel::kTruncShare);
         sum_r += prgFieldBounded(pprg, bound_r);
         sum_r0 += prgFieldBounded(pprg, bound_r0);
       }
@@ -478,8 +490,9 @@ TruncOfflineData Protocol::trunc_offline(size_t batch_size, size_t ell_x, size_t
   }
 
   if (id_ <= nP_ - 2) {
+    const auto pairwise_key = key_manager_.keyWithHelper();
     for (size_t idx = 0; idx < batch_size; ++idx) {
-      auto pprg = makePrg(seed_, id_, idx, PrgLabel::kTruncShare);
+      auto pprg = makePrgFromPairwiseKey(pairwise_key, idx, PrgLabel::kTruncShare);
       off.r_share[idx] = prgFieldBounded(pprg, bound_r);
       off.r0_share[idx] = prgFieldBounded(pprg, bound_r0);
     }
@@ -556,7 +569,8 @@ CompareOfflineData Protocol::compare_offline(size_t lx, size_t s, bool force_t,
       Field sum_r = Field(0);
       Field sum_r0 = Field(0);
       for (int i = 0; i <= nP_ - 2; ++i) {
-        auto pprg = makePrg(seed_, i, j, PrgLabel::kTruncShare);
+        auto pprg = makePrgFromPairwiseKey(key_manager_.keyForParty(i), j,
+                                           PrgLabel::kTruncShare);
         sum_r += prgFieldBounded(pprg, bound_r);
         sum_r0 += prgFieldBounded(pprg, bound_r0);
       }
@@ -567,10 +581,11 @@ CompareOfflineData Protocol::compare_offline(size_t lx, size_t s, bool force_t,
     network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
     network_->flush();
   } else if (id_ <= nP_ - 2) {
+    const auto pairwise_key = key_manager_.keyWithHelper();
     for (size_t j = 1; j <= lx; ++j) {
       const uint64_t bound_r = pow2Bound(lx - j + s);
       const uint64_t bound_r0 = pow2Bound(j);
-      auto pprg = makePrg(seed_, id_, j, PrgLabel::kTruncShare);
+      auto pprg = makePrgFromPairwiseKey(pairwise_key, j, PrgLabel::kTruncShare);
       out.trunc_data.r_share[j - 1] = prgFieldBounded(pprg, bound_r);
       out.trunc_data.r0_share[j - 1] = prgFieldBounded(pprg, bound_r0);
     }

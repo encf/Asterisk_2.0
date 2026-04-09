@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "key_manager.h"
 #include "../io/netmp.h"
 #include "../utils/circuit.h"
 #include "../utils/types.h"
@@ -143,6 +144,7 @@ class Protocol {
   int id_;
   int helper_id_;
   int seed_;
+  KeyManager key_manager_;
   ProtocolConfig config_;
   std::shared_ptr<io::NetIOMP> network_;
   LevelOrderedCircuit circ_;
