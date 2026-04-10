@@ -388,7 +388,7 @@ std::vector<Field> Protocol::mul_online_malicious(
   verifyMaliciousKeyMaterial(offline_data);
   const auto malicious_input_shares = buildMaliciousInputShares(inputs, offline_data);
   // Reuse semi-honest arithmetic kernel for share computation.
-  auto outputs = mul_online_semi_honest(malicious_input_shares, offline_data);
+  auto outputs = mul_online_semi_honest(malicious_input_shares.x_shares, offline_data);
 
   const size_t out_len = circ_.outputs.size();
   if (out_len == 0) {
@@ -433,9 +433,9 @@ std::vector<Field> Protocol::mul_online_malicious(
   return outputs;
 }
 
-std::unordered_map<wire_t, Field> Protocol::buildMaliciousInputShares(
+MaliciousInputShareData Protocol::buildMaliciousInputShares(
     const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
-  std::unordered_map<wire_t, Field> out;
+  MaliciousInputShareData out;
   if (!offline_data.ready) {
     throw std::runtime_error("malicious input sharing requires ready MulOfflineData");
   }
@@ -450,11 +450,6 @@ std::unordered_map<wire_t, Field> Protocol::buildMaliciousInputShares(
     auto helper_prg = makePrg(seed_, helper_id_, 0, PrgLabel::kMaliciousDeltaHelper);
     helper_delta = prgNonZeroField(helper_prg);
   }
-  Field opened_delta = Field(0);
-  if (id_ < helper_id_) {
-    opened_delta = openToComputingParties(offline_data.delta_share);
-  }
-
   size_t input_idx = 0;
   for (const auto& level : circ_.gates_by_level) {
     for (const auto& gate : level) {
@@ -528,12 +523,8 @@ std::unordered_map<wire_t, Field> Protocol::buildMaliciousInputShares(
 
         const Field x_share = x_plus_r_share - ((id_ == kDefaultInputOwner) ? r : Field(0));
         const Field delta_x_share = delta_x_plus_r_share - offline_data.delta_share * r;
-        const Field opened_x = openToComputingParties(x_share);
-        const Field opened_delta_x = openToComputingParties(delta_x_share);
-        if (opened_delta_x != opened_delta * opened_x) {
-          throw std::runtime_error("malicious input sharing consistency check failed");
-        }
-        out[w] = x_share;
+        out.x_shares[w] = x_share;
+        out.delta_x_shares[w] = delta_x_share;
       }
 
       ++input_idx;
@@ -541,6 +532,15 @@ std::unordered_map<wire_t, Field> Protocol::buildMaliciousInputShares(
   }
 
   return out;
+}
+
+MaliciousInputShareData Protocol::maliciousInputShareForTesting(
+    const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
+  if (config_.security_model != SecurityModel::kMalicious) {
+    throw std::runtime_error("maliciousInputShareForTesting requires malicious security model");
+  }
+  verifyMaliciousKeyMaterial(offline_data);
+  return buildMaliciousInputShares(inputs, offline_data);
 }
 
 void Protocol::verifyMaliciousKeyMaterial(const MulOfflineData& offline_data) const {

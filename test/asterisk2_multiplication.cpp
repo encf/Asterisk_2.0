@@ -207,3 +207,64 @@ BOOST_AUTO_TEST_CASE(malicious_mode_mul_roundtrip_smoke) {
 
   BOOST_TEST(rec == Field(40));
 }
+
+BOOST_AUTO_TEST_CASE(malicious_input_sharing_consistency_checked_in_test) {
+  NTL::ZZ_pContext ZZ_p_ctx;
+  ZZ_p_ctx.save();
+  constexpr int nP = 3;
+  constexpr int helper = nP;
+  constexpr int base_port = 21460;
+  constexpr int input_value = 17;
+
+  common::utils::Circuit<Field> circ;
+  auto w0 = circ.newInputWire();
+  auto level_circ = circ.orderGatesByLevel();
+
+  struct SharePack {
+    Field x{Field(0)};
+    Field dx{Field(0)};
+    Field delta_share{Field(0)};
+  };
+
+  std::vector<std::future<SharePack>> parties;
+  parties.reserve(nP + 1);
+  for (int pid = 0; pid <= nP; ++pid) {
+    parties.push_back(std::async(std::launch::async, [&, pid]() {
+      ZZ_p_ctx.restore();
+      auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, base_port, nullptr, true);
+      asterisk2::ProtocolConfig cfg;
+      cfg.security_model = asterisk2::SecurityModel::kMalicious;
+      asterisk2::Protocol proto(nP, pid, network, level_circ, 200, cfg);
+
+      auto off = proto.mul_offline();
+      network->sync();
+      std::unordered_map<common::utils::wire_t, Field> inputs;
+      inputs[w0] = (pid == 0) ? Field(input_value) : Field(0);
+      const auto shares = proto.maliciousInputShareForTesting(inputs, off);
+      if (pid == helper) {
+        return SharePack{};
+      }
+
+      SharePack out;
+      out.x = shares.x_shares.at(w0);
+      out.dx = shares.delta_x_shares.at(w0);
+      out.delta_share = off.delta_share;
+      return out;
+    }));
+  }
+
+  Field sum_x = Field(0);
+  Field sum_dx = Field(0);
+  Field delta = Field(0);
+  for (int pid = 0; pid <= nP; ++pid) {
+    const auto pack = parties[pid].get();
+    if (pid < nP) {
+      sum_x += pack.x;
+      sum_dx += pack.dx;
+      delta += pack.delta_share;
+    }
+  }
+
+  BOOST_TEST(sum_x == Field(input_value));
+  BOOST_TEST(sum_dx == delta * sum_x);
+}

@@ -154,7 +154,7 @@ This starts party IDs `0..3` locally and stores logs under:
 - 该路线图把实现拆分为认证分享、延迟验证、公平输出释放、恶意乘法、trunc/compare 升级、benchmark 与测试。
 - 当前已落地：malicious 乘法离线/在线分派、`Δ`/`Δ^{-1}` key-material 准备与一致性检查、`Pi_MACSetup-DH` 与显式 `KeyManager`。
 - `KeyManager` 当前维护两类会话密钥：helper<->party pairwise key，以及仅计算方共享的 `K_P`（用于 `compare_offline` 共享掩码/置换生成）。
-- malicious 输入分享已接入：按 `x' = x + r + t` 与 helper 补足 share 的流程生成 `[x]`/`[Δx]`，并在计算方侧校验 `sum_i[Δx]_i = Δ * sum_i[x]_i`（当前输入 owner 约定为 `P0`）。
+- malicious 输入分享已接入：按 `x' = x + r + t` 与 helper 补足 share 的流程生成 `[x]`/`[Δx]`（当前输入 owner 约定为 `P0`）；一致性检查改由单元测试覆盖。
 - 当前仍在开发：Ver-DH、deferred batch verify、fair release、trunc/compare 的 malicious 验证管线。
 
 ## Usage

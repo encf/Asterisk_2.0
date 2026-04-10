@@ -83,6 +83,11 @@ struct BGTEZStats {
   size_t batched_open_calls{0};
 };
 
+struct MaliciousInputShareData {
+  std::unordered_map<wire_t, Field> x_shares;
+  std::unordered_map<wire_t, Field> delta_x_shares;
+};
+
 class Protocol {
  public:
   Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
@@ -114,6 +119,8 @@ class Protocol {
   Field bgtezCompare(const Field& x_share, size_t lx, size_t s,
                     bool force_t = false, bool forced_t_value = false,
                     BGTEZStats* stats = nullptr);
+  MaliciousInputShareData maliciousInputShareForTesting(
+      const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
 
  private:
   struct OpenPair {
@@ -131,7 +138,7 @@ class Protocol {
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
   std::vector<Field> mul_online_malicious(
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
-  std::unordered_map<wire_t, Field> buildMaliciousInputShares(
+  MaliciousInputShareData buildMaliciousInputShares(
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
   void verifyMaliciousKeyMaterial(const MulOfflineData& offline_data) const;
   std::vector<std::vector<Field>> recvFieldVectorsFromPeers(const std::vector<int>& peers,

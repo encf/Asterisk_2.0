@@ -14,7 +14,7 @@
 - ✅ 已实现显式会话级密钥管理模块：`src/Asterisk2.0/key_manager.h/.cpp`，`Pi_MACSetup-DH` 改为从 key manager 读取 helper<->party pairwise keys。
 - ✅ `runMacSetupDH` 不再在函数内部创建/管理密钥，统一改为由调用方显式传入 `KeyManager`。
 - ✅ semi-honest 离线 share 派生（mul/trunc/compare）已接入 key manager，不再直接用 `(seed, party_id)` 在协议逻辑内拼“隐式密钥”；其中 compare 离线共享掩码改为使用仅计算方共享的 `K_P`。
-- ✅ 已实现 malicious 输入认证分享原语（`x' = x + r + t`、helper 侧补足 share、计算方本地去 mask），并在计算方侧增加 `sum_i[Δx]_i = Δ * sum_i[x]_i` 一致性检查。
+- ✅ 已实现 malicious 输入认证分享原语（`x' = x + r + t`、helper 侧补足 share、计算方本地去 mask）；一致性检查由测试用例覆盖。
 - ⏳ Ver-DH、deferred batch verify 与 fair release 尚未接入（后续阶段实现）。
 
 ## 0. 当前基线（必须先确认）
