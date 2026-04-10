@@ -11,6 +11,8 @@
 
 #include <emp-tool/emp-tool.h>
 
+#include "mac_setup.h"
+
 namespace asterisk2 {
 
 namespace {
@@ -345,9 +347,14 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
     }
   }
 
-  // NOTE: malicious mul offline no longer bootstraps [Δ]/[Δ^{-1}] here.
-  out.delta_share = Field(0);
-  out.delta_inv_share = Field(0);
+  const auto mac_setup = runMacSetupDH(nP_, id_, network_, key_manager_, seed_);
+  if (id_ < helper_id_) {
+    out.delta_share = mac_setup.party.delta_share;
+    out.delta_inv_share = mac_setup.party.delta_inv_share;
+  } else if (id_ == helper_id_) {
+    out.helper_delta = mac_setup.helper.delta;
+    out.helper_delta_inv = mac_setup.helper.delta_inv;
+  }
   out.ready = true;
   return out;
 }
@@ -500,8 +507,11 @@ MaliciousInputShareData Protocol::buildMaliciousInputShares(
 
   Field helper_delta = Field(0);
   if (id_ == helper_id_) {
-    auto helper_prg = makePrg(seed_, helper_id_, 0, PrgLabel::kMaliciousDeltaHelper);
-    helper_delta = prgNonZeroField(helper_prg);
+    helper_delta = offline_data.helper_delta;
+    if (helper_delta == Field(0)) {
+      auto helper_prg = makePrg(seed_, helper_id_, 0, PrgLabel::kMaliciousDeltaHelper);
+      helper_delta = prgNonZeroField(helper_prg);
+    }
   }
   size_t input_idx = 0;
   for (const auto& level : circ_.gates_by_level) {
@@ -607,10 +617,6 @@ void Protocol::verifyMaliciousKeyMaterial(const MulOfflineData& offline_data) co
 
   const Field delta = openToComputingParties(offline_data.delta_share);
   const Field delta_inv = openToComputingParties(offline_data.delta_inv_share);
-  if (delta == Field(0) && delta_inv == Field(0)) {
-    // Delta bootstrap disabled in malicious mul offline preprocessing.
-    return;
-  }
   if (delta == Field(0) || delta * delta_inv != Field(1)) {
     throw std::runtime_error("malicious key-material consistency check failed");
   }

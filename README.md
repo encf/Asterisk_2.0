@@ -152,7 +152,7 @@ This starts party IDs `0..3` locally and stores logs under:
 
 - 详细的恶意安全实现任务分解见：`docs/asterisk2_malicious_implementation_plan.md`。
 - 该路线图把实现拆分为认证分享、延迟验证、公平输出释放、恶意乘法、trunc/compare 升级、benchmark 与测试。
-- 当前已落地：malicious 乘法离线/在线分派、authenticated tuple 预处理、`Pi_MACSetup-DH` 与显式 `KeyManager`。
+- 当前已落地：malicious 乘法离线/在线分派、authenticated tuple 预处理、`Pi_MACSetup-DH` 与显式 `KeyManager`（`[Δ]` / `[Δ^{-1}]` 由 `runMacSetupDH` 提供）。
 - `KeyManager` 当前维护两类会话密钥：helper<->party pairwise key，以及仅计算方共享的 `K_P`（用于 `compare_offline` 共享掩码/置换生成）。
 - malicious 输入分享已接入：按 `x' = x + r + t` 与 helper 补足 share 的流程生成 `[x]`/`[Δx]`（当前输入 owner 约定为 `P0`）；一致性检查改由单元测试覆盖。
 - malicious 乘法离线预处理已接入 authenticated tuple：除 `[a],[b],[ab]` 外，还会生成 `[a'],[b'],[c'],[a'b'],[a'c'],[b'c'],[a'b'c']` 的 additive shares。

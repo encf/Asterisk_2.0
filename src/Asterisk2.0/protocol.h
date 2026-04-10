@@ -39,6 +39,9 @@ struct MulOfflineData {
   // In semi-honest mode these remain zero.
   Field delta_share{Field(0)};
   Field delta_inv_share{Field(0)};
+  // Helper-only plaintext MAC key material (not shared with computing parties).
+  Field helper_delta{Field(0)};
+  Field helper_delta_inv{Field(0)};
   bool ready{false};
 };
 

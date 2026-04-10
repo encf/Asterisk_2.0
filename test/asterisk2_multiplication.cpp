@@ -266,8 +266,7 @@ BOOST_AUTO_TEST_CASE(malicious_input_sharing_consistency_checked_in_test) {
   }
 
   BOOST_TEST(sum_x == Field(input_value));
-  BOOST_TEST(delta == Field(0));
-  (void)sum_dx;
+  BOOST_TEST(sum_dx == delta * sum_x);
 }
 
 BOOST_AUTO_TEST_CASE(malicious_offline_generates_authenticated_auxiliary_tuples) {

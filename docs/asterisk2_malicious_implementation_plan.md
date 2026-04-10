@@ -8,7 +8,7 @@
 - ✅ Phase 1 bootstrap 已落地：`mul_offline()` 在 malicious 模式不再直接抛异常。
 - ✅ 已新增 malicious 模式乘法冒烟测试：`test/asterisk2_multiplication.cpp` 中 `malicious_mode_mul_roundtrip_smoke`。
 - ✅ semi-honest 与 malicious 乘法路径已在代码层分离（`mul_offline_semi_honest/mul_offline_malicious` 与 `mul_online_semi_honest/mul_online_malicious`）。
-- ✅ `mul_online_malicious` 已支持在缺省 `Δ` bootstrap 关闭场景下继续执行（当 `[Δ]` 与 `[Δ^{-1}]` 均为 0 时跳过该检查分支）。
+- ✅ `mul_online_malicious` 已接入 `runMacSetupDH` 生成的 `[Δ]` 与 `[Δ^{-1}]` 一致性校验（计算方打开并校验 `Δ * Δ^{-1} = 1`）。
 - ✅ 新增输出一致性校验回路：helper 从计算方输出 share 重构结果并回传，计算方与本地 batched-open 重构结果比对。
 - ✅ `Pi_MACSetup-DH` 已按独立模块实现：`src/Asterisk2.0/mac_setup.h/.cpp`，并新增 `asterisk2_mac_setup_dh_test` 覆盖核心不变量。
 - ✅ 已实现显式会话级密钥管理模块：`src/Asterisk2.0/key_manager.h/.cpp`，`Pi_MACSetup-DH` 改为从 key manager 读取 helper<->party pairwise keys。
