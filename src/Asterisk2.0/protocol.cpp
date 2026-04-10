@@ -1039,6 +1039,15 @@ std::vector<Field> Protocol::online(const std::unordered_map<wire_t, Field>& inp
   return mul_online(inputs, off);
 }
 
+std::vector<Field> Protocol::onlineSemiHonestForBenchmark(
+    const std::unordered_map<wire_t, Field>& inputs,
+    const std::vector<TripleShare>& triples) {
+  MulOfflineData off;
+  off.triples = triples;
+  off.ready = true;
+  return mul_online_semi_honest(inputs, off);
+}
+
 std::vector<Field> Protocol::probabilisticTruncate(const std::vector<Field>& x_shares, size_t ell_x,
                                                    size_t m, size_t s) {
   auto off = trunc_offline(x_shares.size(), ell_x, m, s);

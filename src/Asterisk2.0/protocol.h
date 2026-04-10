@@ -123,6 +123,9 @@ class Protocol {
 
   std::vector<Field> online(const std::unordered_map<wire_t, Field>& inputs,
                             const std::vector<TripleShare>& triples);
+  std::vector<Field> onlineSemiHonestForBenchmark(
+      const std::unordered_map<wire_t, Field>& inputs,
+      const std::vector<TripleShare>& triples);
   std::vector<Field> probabilisticTruncate(const std::vector<Field>& x_shares,
                                            size_t ell_x, size_t m,
                                            size_t s);

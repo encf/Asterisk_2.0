@@ -23,7 +23,7 @@ cd Asterisk
 ```sh
 sudo apt-get update
 sudo apt-get install -y \
-  build-essential cmake git pkg-config \
+  build-essential ccache cmake git pkg-config \
   libgmp-dev libntl-dev libboost-all-dev nlohmann-json3-dev libssl-dev
 ```
 
@@ -45,6 +45,12 @@ sudo cmake --install /tmp/emp-tool-master/build
 ### 3) 编译项目
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)" --target benchmarks tests
+
+# 推荐：启用 ccache 以加速重复编译
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build -j"$(nproc)" --target benchmarks tests
 ```
 
@@ -118,6 +124,8 @@ On Ubuntu, you can install all required dependencies (including `emp-tool`) with
 ./scripts/install_deps_ubuntu.sh
 ```
 
+该脚本会安装 `ccache`，并在构建 `emp-tool` 时启用 compiler launcher。
+
 If GitHub cloning is restricted in your environment, you can use the official
 EMP installer script:
 
@@ -130,7 +138,9 @@ Then compile:
 
 ```sh
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
 make -j"$(nproc)" tests benchmarks
 ```
 

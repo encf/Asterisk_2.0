@@ -135,7 +135,11 @@ void benchmark(const bpo::variables_map& opts) {
     std::vector<Field> local_outputs;
     std::vector<Field> local_trunc_outputs;
     if (pid < nP) {
-      local_outputs = proto.online(inputs, triples);
+      if (security_model == asterisk2::SecurityModel::kSemiHonest) {
+        local_outputs = proto.onlineSemiHonestForBenchmark(inputs, triples);
+      } else {
+        local_outputs = proto.online(inputs, triples);
+      }
     }
     StatsPoint online_end(*network);
 
