@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # One-click dependency installer for Ubuntu (22.04/24.04 tested).
-# It installs system packages and installs emp-tool via emp-readme installer.
+# It installs system packages and builds emp-tool from source into /usr/local.
 
 if [[ "${EUID}" -eq 0 ]]; then
   SUDO=""
@@ -21,16 +21,22 @@ ${SUDO} apt-get install -y \
   libntl-dev \
   libboost-all-dev \
   nlohmann-json3-dev \
-  libssl-dev \
-  wget \
-  python3
+  libssl-dev
 
-echo "[2/3] Installing emp-tool via emp-readme installer..."
+echo "[2/3] Building and installing emp-tool..."
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
-cd "${WORKDIR}"
-wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
-python install.py --deps --tool
+
+EMP_TOOL_GIT_URL="${EMP_TOOL_GIT_URL:-https://github.com/emp-toolkit/emp-tool.git}"
+if ! git clone --depth 1 "${EMP_TOOL_GIT_URL}" "${WORKDIR}/emp-tool"; then
+  echo "Failed to clone emp-tool from: ${EMP_TOOL_GIT_URL}" >&2
+  echo "If GitHub is blocked in your environment, rerun with a reachable mirror, e.g.:" >&2
+  echo "  EMP_TOOL_GIT_URL=<mirror-url> ./scripts/install_deps_ubuntu.sh" >&2
+  exit 1
+fi
+cmake -S "${WORKDIR}/emp-tool" -B "${WORKDIR}/emp-tool/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "${WORKDIR}/emp-tool/build" -j"$(nproc)"
+${SUDO} cmake --install "${WORKDIR}/emp-tool/build"
 
 echo "[3/3] Done."
 echo "Now configure and build Asterisk:"
