@@ -97,6 +97,12 @@ struct BGTEZStats {
   size_t batched_open_calls{0};
 };
 
+struct OnlineTimingStats {
+  double local_compute_ms{0.0};
+  double network_overhead_ms{0.0};
+  bool ready{false};
+};
+
 struct MaliciousInputShareData {
   std::unordered_map<wire_t, Field> x_shares;
   std::unordered_map<wire_t, Field> delta_x_shares;
@@ -136,6 +142,7 @@ class Protocol {
   Field bgtezCompare(const Field& x_share, size_t lx, size_t s,
                     bool force_t = false, bool forced_t_value = false,
                     BGTEZStats* stats = nullptr);
+  OnlineTimingStats onlineTimingStats() const { return online_timing_stats_; }
   MaliciousInputShareData maliciousInputShareForTesting(
       const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data);
 
@@ -165,6 +172,7 @@ class Protocol {
   void maybeSimulateStep(size_t aggregate_bytes) const;
   void maybeSimulateLatency() const;
   void maybeSimulateBandwidth(size_t bytes) const;
+  void resetOnlineTimingStats();
 
   int nP_;
   int id_;
@@ -175,6 +183,7 @@ class Protocol {
   std::shared_ptr<io::NetIOMP> network_;
   LevelOrderedCircuit circ_;
   std::vector<Field> wire_share_;
+  OnlineTimingStats online_timing_stats_;
 };
 
 }  // namespace asterisk2

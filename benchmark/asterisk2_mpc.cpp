@@ -134,9 +134,11 @@ void benchmark(const bpo::variables_map& opts) {
     StatsPoint online_start(*network);
     std::vector<Field> local_outputs;
     std::vector<Field> local_trunc_outputs;
+    asterisk2::OnlineTimingStats online_timing_stats{};
     if (pid < nP) {
       if (security_model == asterisk2::SecurityModel::kSemiHonest) {
         local_outputs = proto.onlineSemiHonestForBenchmark(inputs, triples);
+        online_timing_stats = proto.onlineTimingStats();
       } else {
         local_outputs = proto.online(inputs, triples);
       }
@@ -227,6 +229,8 @@ void benchmark(const bpo::variables_map& opts) {
         {"offline_comm_count", offline_comm_count},
         {"online_comm_rounds", online_comm_rounds},
         {"online_send_count", online_send_count},
+        {"online_local_compute_ms", online_timing_stats.local_compute_ms},
+        {"online_network_overhead_ms", online_timing_stats.network_overhead_ms},
         {"comm_model_round_ms", comm_model_round_ms},
         {"comm_model_total_ms", comm_model_total_ms},
         // keep online_comm_count for compatibility; now it denotes rounds.

@@ -217,6 +217,10 @@ Execute the following commands from the `build` directory created during compila
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 \
   --bandwidth-bps 100000000 --latency-ms 20
 
+# semi-honest 模式会额外输出在线阶段细分时间：
+# - online_local_compute_ms
+# - online_network_overhead_ms
+
 # The `asterisk_mpc` script in the repository root can be used to run the programs 
 # for all parties from the same terminal.
 # For example, the previous benchmark can be run using the script as shown

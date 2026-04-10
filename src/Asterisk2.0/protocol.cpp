@@ -368,6 +368,7 @@ std::vector<Field> Protocol::mul_online(const std::unordered_map<wire_t, Field>&
 
 std::vector<Field> Protocol::mul_online_semi_honest(
     const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
+  resetOnlineTimingStats();
   if (!offline_data.ready) {
     throw std::runtime_error("mul_online requires ready MulOfflineData from mul_offline");
   }
@@ -408,6 +409,7 @@ std::vector<Field> Protocol::mul_online_semi_honest(
     }
 
     if (!mul_gates.empty()) {
+      const auto local_compute_start = std::chrono::steady_clock::now();
       std::vector<OpenPair> local_pairs(mul_gates.size());
       for (size_t i = 0; i < mul_gates.size(); ++i) {
         if (mul_idx + i >= offline_data.triples.size()) {
@@ -418,8 +420,13 @@ std::vector<Field> Protocol::mul_online_semi_honest(
         local_pairs[i].d = wire_share_[g->in1] - t.a;
         local_pairs[i].e = wire_share_[g->in2] - t.b;
       }
+      const auto local_compute_before_open = std::chrono::steady_clock::now();
+      online_timing_stats_.local_compute_ms +=
+          std::chrono::duration<double, std::milli>(local_compute_before_open - local_compute_start)
+              .count();
 
       auto opened = openPairsToComputingParties(local_pairs);
+      const auto local_compute_after_open = std::chrono::steady_clock::now();
       for (size_t i = 0; i < mul_gates.size(); ++i) {
         const auto* g = mul_gates[i];
         const auto& t = offline_data.triples[mul_idx + i];
@@ -429,6 +436,11 @@ std::vector<Field> Protocol::mul_online_semi_honest(
         }
         wire_share_[g->out] = out;
       }
+      const auto local_compute_end = std::chrono::steady_clock::now();
+      online_timing_stats_.local_compute_ms +=
+          std::chrono::duration<double, std::milli>(local_compute_end - local_compute_after_open)
+              .count();
+      online_timing_stats_.ready = true;
       mul_idx += mul_gates.size();
     }
   }
@@ -1048,6 +1060,10 @@ std::vector<Field> Protocol::onlineSemiHonestForBenchmark(
   return mul_online_semi_honest(inputs, off);
 }
 
+void Protocol::resetOnlineTimingStats() {
+  online_timing_stats_ = OnlineTimingStats{};
+}
+
 std::vector<Field> Protocol::probabilisticTruncate(const std::vector<Field>& x_shares, size_t ell_x,
                                                    size_t m, size_t s) {
   auto off = trunc_offline(x_shares.size(), ell_x, m, s);
@@ -1067,12 +1083,18 @@ std::vector<Protocol::OpenPair> Protocol::openPairsToComputingParties(
   }
 
   const auto peers = computingPeerIdsExcludingSelf();
+  const auto network_phase_start = std::chrono::steady_clock::now();
   // Full-duplex model: peer send/recv overlap in one open round.
   maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers.size());
   sendFieldVectorToPeers(peers, send_buf);
 
   std::vector<OpenPair> sums = local_pairs;
   auto recv_all = recvFieldVectorsFromPeers(peers, send_buf.size());
+  const auto network_phase_end = std::chrono::steady_clock::now();
+  auto* self = const_cast<Protocol*>(this);
+  self->online_timing_stats_.network_overhead_ms +=
+      std::chrono::duration<double, std::milli>(network_phase_end - network_phase_start).count();
+  self->online_timing_stats_.ready = true;
   for (const auto& recv_buf : recv_all) {
     for (size_t i = 0; i < local_pairs.size(); ++i) {
       sums[i].d += recv_buf[2 * i];
