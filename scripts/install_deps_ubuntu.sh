@@ -23,20 +23,17 @@ ${SUDO} apt-get install -y \
   nlohmann-json3-dev \
   libssl-dev
 
-echo "[2/3] Building and installing emp-tool..."
-WORKDIR="$(mktemp -d)"
-trap 'rm -rf "${WORKDIR}"' EXIT
-
-EMP_TOOL_GIT_URL="${EMP_TOOL_GIT_URL:-https://github.com/emp-toolkit/emp-tool.git}"
-if ! git clone --depth 1 "${EMP_TOOL_GIT_URL}" "${WORKDIR}/emp-tool"; then
-  echo "Failed to clone emp-tool from: ${EMP_TOOL_GIT_URL}" >&2
-  echo "If GitHub is blocked in your environment, rerun with a reachable mirror, e.g.:" >&2
-  echo "  EMP_TOOL_GIT_URL=<mirror-url> ./scripts/install_deps_ubuntu.sh" >&2
+echo "[2/3] Building and installing emp-tool from local source..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EMP_TOOL_LOCAL_DIR="${SCRIPT_DIR}/../emp-tool"
+if [[ ! -d "${EMP_TOOL_LOCAL_DIR}" ]]; then
+  echo "Local emp-tool directory not found: ${EMP_TOOL_LOCAL_DIR}" >&2
   exit 1
 fi
-cmake -S "${WORKDIR}/emp-tool" -B "${WORKDIR}/emp-tool/build" -DCMAKE_BUILD_TYPE=Release
-cmake --build "${WORKDIR}/emp-tool/build" -j"$(nproc)"
-${SUDO} cmake --install "${WORKDIR}/emp-tool/build"
+
+cmake -S "${EMP_TOOL_LOCAL_DIR}" -B "${EMP_TOOL_LOCAL_DIR}/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "${EMP_TOOL_LOCAL_DIR}/build" -j"$(nproc)"
+${SUDO} cmake --install "${EMP_TOOL_LOCAL_DIR}/build"
 
 echo "[3/3] Done."
 echo "Now configure and build Asterisk:"
