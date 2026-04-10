@@ -443,50 +443,95 @@ std::vector<Field> Protocol::mul_online_semi_honest(
 
 std::vector<Field> Protocol::mul_online_malicious(
     const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
-  // Next-phase bootstrap: verify malicious key material consistency first.
   verifyMaliciousKeyMaterial(offline_data);
   const auto malicious_input_shares = buildMaliciousInputShares(inputs, offline_data);
-  // Reuse semi-honest arithmetic kernel for share computation.
-  auto outputs = mul_online_semi_honest(malicious_input_shares.x_shares, offline_data);
-
-  const size_t out_len = circ_.outputs.size();
-  if (out_len == 0) {
-    return outputs;
-  }
-  if (id_ == helper_id_) {
-    // Helper reconstructs outputs from computing-party shares and broadcasts
-    // reconstructed values for cross-check by computing parties.
-    std::vector<Field> reconstructed(out_len, Field(0));
-    for (int p = 0; p < helper_id_; ++p) {
-      std::vector<Field> share_vec(out_len, Field(0));
-      network_->recv(p, share_vec.data(), share_vec.size() * common::utils::FIELDSIZE);
-      for (size_t i = 0; i < out_len; ++i) {
-        reconstructed[i] += share_vec[i];
-      }
-    }
-    for (int p = 0; p < helper_id_; ++p) {
-      maybeSimulateStep(out_len * common::utils::FIELDSIZE);
-      network_->send(p, reconstructed.data(), reconstructed.size() * common::utils::FIELDSIZE);
-    }
-    network_->flush();
+  if (id_ >= helper_id_) {
     return {};
   }
 
-  // Computing parties send their output shares to helper.
-  maybeSimulateStep(out_len * common::utils::FIELDSIZE);
-  network_->send(helper_id_, outputs.data(), outputs.size() * common::utils::FIELDSIZE);
-  network_->flush();
+  std::unordered_map<wire_t, Field> delta_wire_share = malicious_input_shares.delta_x_shares;
+  size_t mul_idx = 0;
+  for (const auto& level : circ_.gates_by_level) {
+    std::vector<const FIn2Gate*> mul_gates;
+    mul_gates.reserve(level.size());
 
-  // Computing parties also reconstruct outputs among themselves and verify they
-  // match helper-side reconstruction.
-  const std::vector<Field> local_reconstructed = openVectorToComputingParties(outputs);
-  std::vector<Field> helper_reconstructed(out_len, Field(0));
-  network_->recv(helper_id_, helper_reconstructed.data(),
-                 helper_reconstructed.size() * common::utils::FIELDSIZE);
-  if (local_reconstructed != helper_reconstructed) {
-    throw std::runtime_error("malicious output consistency check failed");
+    for (const auto& gate : level) {
+      switch (gate->type) {
+        case common::utils::GateType::kInp: {
+          const auto xit = malicious_input_shares.x_shares.find(gate->out);
+          wire_share_[gate->out] =
+              (xit == malicious_input_shares.x_shares.end()) ? Field(0) : xit->second;
+          const auto dit = malicious_input_shares.delta_x_shares.find(gate->out);
+          delta_wire_share[gate->out] =
+              (dit == malicious_input_shares.delta_x_shares.end()) ? Field(0) : dit->second;
+          break;
+        }
+        case common::utils::GateType::kAdd: {
+          auto* g = static_cast<FIn2Gate*>(gate.get());
+          wire_share_[g->out] = wire_share_[g->in1] + wire_share_[g->in2];
+          delta_wire_share[g->out] = delta_wire_share[g->in1] + delta_wire_share[g->in2];
+          break;
+        }
+        case common::utils::GateType::kSub: {
+          auto* g = static_cast<FIn2Gate*>(gate.get());
+          wire_share_[g->out] = wire_share_[g->in1] - wire_share_[g->in2];
+          delta_wire_share[g->out] = delta_wire_share[g->in1] - delta_wire_share[g->in2];
+          break;
+        }
+        case common::utils::GateType::kMul: {
+          auto* g = static_cast<FIn2Gate*>(gate.get());
+          mul_gates.push_back(g);
+          break;
+        }
+        default:
+          throw std::runtime_error("Asterisk2.0 benchmark currently supports Inp/Add/Sub/Mul only");
+      }
+    }
+
+    for (size_t i = 0; i < mul_gates.size(); ++i) {
+      if (mul_idx + i >= offline_data.triples.size() ||
+          mul_idx + i >= offline_data.auth_tuples.size()) {
+        throw std::runtime_error("Insufficient malicious offline tuples in mul_online phase");
+      }
+      const auto* g = mul_gates[i];
+      const auto& t = offline_data.triples[mul_idx + i];
+      const auto& auth = offline_data.auth_tuples[mul_idx + i];
+
+      const Field d_share = wire_share_[g->in1] - t.a;
+      const Field e_share = wire_share_[g->in2] - t.b;
+      const Field d_delta_share = delta_wire_share[g->in1] - auth.a_prime;
+      const Field e_delta_share = delta_wire_share[g->in2] - auth.b_prime;
+      const Field f_share = d_delta_share * e_delta_share - auth.c_prime;
+
+      const Field d = openToComputingParties(d_share);
+      const Field e = openToComputingParties(e_share);
+      const Field d_delta = openToComputingParties(d_delta_share);
+      const Field e_delta = openToComputingParties(e_delta_share);
+      const Field f = openToComputingParties(f_share);
+
+      Field xy_share = e * t.a + d * t.b + t.c;
+      if (id_ == 0) {
+        xy_share += d * e;
+      }
+
+      Field delta_xy_share = e * auth.a_prime + d * auth.b_prime + auth.c_prime;
+      if (id_ == 0) {
+        delta_xy_share += d * e_delta;
+      }
+      delta_xy_share += auth.a_prime_c_prime * e_delta + auth.b_prime_c_prime * d_delta +
+                        auth.a_prime_b_prime * f + auth.a_prime_b_prime_c_prime;
+
+      wire_share_[g->out] = xy_share;
+      delta_wire_share[g->out] = delta_xy_share;
+    }
+    mul_idx += mul_gates.size();
   }
 
+  std::vector<Field> outputs;
+  outputs.reserve(circ_.outputs.size());
+  for (auto wid : circ_.outputs) {
+    outputs.push_back(wire_share_[wid]);
+  }
   return outputs;
 }
 
