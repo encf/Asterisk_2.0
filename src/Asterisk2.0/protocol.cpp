@@ -122,7 +122,26 @@ Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
       config_(config),
       network_(std::move(network)),
       circ_(std::move(circ)),
-      wire_share_(circ_.num_gates, Field(0)) {}
+      wire_share_(circ_.num_gates, Field(0)) {
+  if (config_.security_model == SecurityModel::kMalicious) {
+    initializeMaliciousMacSetup();
+  }
+}
+
+void Protocol::initializeMaliciousMacSetup() {
+  if (malicious_mac_setup_ready_) {
+    return;
+  }
+  const auto mac_setup = runMacSetupDH(nP_, id_, network_, key_manager_, seed_);
+  if (id_ < helper_id_) {
+    malicious_delta_share_ = mac_setup.party.delta_share;
+    malicious_delta_inv_share_ = mac_setup.party.delta_inv_share;
+  } else if (id_ == helper_id_) {
+    helper_delta_ = mac_setup.helper.delta;
+    helper_delta_inv_ = mac_setup.helper.delta_inv;
+  }
+  malicious_mac_setup_ready_ = true;
+}
 
 std::vector<int> Protocol::computingPeerIdsExcludingSelf() const {
   std::vector<int> peers;
@@ -261,6 +280,9 @@ MulOfflineData Protocol::mul_offline_semi_honest(const std::vector<FIn2Gate>& mu
 }
 
 MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_gates) {
+  if (!malicious_mac_setup_ready_) {
+    throw std::runtime_error("malicious MAC setup not initialized");
+  }
   MulOfflineData out;
   out.triples.resize(mul_gates.size());
   out.auth_tuples.resize(mul_gates.size());
@@ -346,13 +368,12 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
     }
   }
 
-  const auto mac_setup = runMacSetupDH(nP_, id_, network_, key_manager_, seed_);
   if (id_ < helper_id_) {
-    out.delta_share = mac_setup.party.delta_share;
-    out.delta_inv_share = mac_setup.party.delta_inv_share;
+    out.delta_share = malicious_delta_share_;
+    out.delta_inv_share = malicious_delta_inv_share_;
   } else if (id_ == helper_id_) {
-    out.helper_delta = mac_setup.helper.delta;
-    out.helper_delta_inv = mac_setup.helper.delta_inv;
+    out.helper_delta = helper_delta_;
+    out.helper_delta_inv = helper_delta_inv_;
   }
   out.ready = true;
   return out;
@@ -515,11 +536,16 @@ std::vector<Field> Protocol::mul_online_malicious(
       const Field e_delta_share = delta_wire_share[g->in2] - auth.b_prime;
       const Field f_share = d_delta_share * e_delta_share - auth.c_prime;
 
-      const Field d = openToComputingParties(d_share);
-      const Field e = openToComputingParties(e_share);
-      const Field d_delta = openToComputingParties(d_delta_share);
-      const Field e_delta = openToComputingParties(e_delta_share);
-      const Field f = openToComputingParties(f_share);
+      const std::vector<Field> opened_batch =
+          openVectorToComputingParties({d_share, e_share, d_delta_share, e_delta_share, f_share});
+      if (opened_batch.size() != 5) {
+        throw std::runtime_error("malicious online batched-open failed");
+      }
+      const Field d = opened_batch[0];
+      const Field e = opened_batch[1];
+      const Field d_delta = opened_batch[2];
+      const Field e_delta = opened_batch[3];
+      const Field f = opened_batch[4];
 
       Field xy_share = e * t.a + d * t.b + t.c;
       if (id_ == 0) {

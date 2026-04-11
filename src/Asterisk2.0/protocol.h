@@ -173,6 +173,7 @@ class Protocol {
   void maybeSimulateLatency() const;
   void maybeSimulateBandwidth(size_t bytes) const;
   void resetOnlineTimingStats();
+  void initializeMaliciousMacSetup();
 
   int nP_;
   int id_;
@@ -184,6 +185,11 @@ class Protocol {
   LevelOrderedCircuit circ_;
   std::vector<Field> wire_share_;
   OnlineTimingStats online_timing_stats_;
+  bool malicious_mac_setup_ready_{false};
+  Field malicious_delta_share_{Field(0)};
+  Field malicious_delta_inv_share_{Field(0)};
+  Field helper_delta_{Field(0)};
+  Field helper_delta_inv_{Field(0)};
 };
 
 }  // namespace asterisk2
