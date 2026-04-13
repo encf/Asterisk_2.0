@@ -14,6 +14,7 @@ echo "[1/3] Installing Ubuntu packages..."
 ${SUDO} apt-get update
 ${SUDO} apt-get install -y \
   build-essential \
+  ccache \
   cmake \
   git \
   pkg-config \
@@ -31,12 +32,18 @@ if [[ ! -d "${EMP_TOOL_LOCAL_DIR}" ]]; then
   exit 1
 fi
 
-cmake -S "${EMP_TOOL_LOCAL_DIR}" -B "${EMP_TOOL_LOCAL_DIR}/build" -DCMAKE_BUILD_TYPE=Release
+cmake -S "${EMP_TOOL_LOCAL_DIR}" -B "${EMP_TOOL_LOCAL_DIR}/build" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build "${EMP_TOOL_LOCAL_DIR}/build" -j"$(nproc)"
 ${SUDO} cmake --install "${EMP_TOOL_LOCAL_DIR}/build"
+
+echo "[2.5/3] Configuring ccache..."
+ccache --max-size=10G >/dev/null 2>&1 || true
 
 echo "[3/3] Done."
 echo "Now configure and build Asterisk:"
 echo "  mkdir -p build && cd build"
-echo "  cmake -DCMAKE_BUILD_TYPE=Release .."
+echo "  cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache .."
 echo "  make -j\$(nproc) tests benchmarks"

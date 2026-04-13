@@ -122,7 +122,26 @@ Protocol::Protocol(int nP, int id, std::shared_ptr<io::NetIOMP> network,
       config_(config),
       network_(std::move(network)),
       circ_(std::move(circ)),
-      wire_share_(circ_.num_gates, Field(0)) {}
+      wire_share_(circ_.num_gates, Field(0)) {
+  if (config_.security_model == SecurityModel::kMalicious) {
+    initializeMaliciousMacSetup();
+  }
+}
+
+void Protocol::initializeMaliciousMacSetup() {
+  if (malicious_mac_setup_ready_) {
+    return;
+  }
+  const auto mac_setup = runMacSetupDH(nP_, id_, network_, key_manager_, seed_);
+  if (id_ < helper_id_) {
+    malicious_delta_share_ = mac_setup.party.delta_share;
+    malicious_delta_inv_share_ = mac_setup.party.delta_inv_share;
+  } else if (id_ == helper_id_) {
+    helper_delta_ = mac_setup.helper.delta;
+    helper_delta_inv_ = mac_setup.helper.delta_inv;
+  }
+  malicious_mac_setup_ready_ = true;
+}
 
 std::vector<int> Protocol::computingPeerIdsExcludingSelf() const {
   std::vector<int> peers;
@@ -261,6 +280,9 @@ MulOfflineData Protocol::mul_offline_semi_honest(const std::vector<FIn2Gate>& mu
 }
 
 MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_gates) {
+  if (!malicious_mac_setup_ready_) {
+    throw std::runtime_error("malicious MAC setup not initialized");
+  }
   MulOfflineData out;
   out.triples.resize(mul_gates.size());
   out.auth_tuples.resize(mul_gates.size());
@@ -346,13 +368,12 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
     }
   }
 
-  const auto mac_setup = runMacSetupDH(nP_, id_, network_, key_manager_, seed_);
   if (id_ < helper_id_) {
-    out.delta_share = mac_setup.party.delta_share;
-    out.delta_inv_share = mac_setup.party.delta_inv_share;
+    out.delta_share = malicious_delta_share_;
+    out.delta_inv_share = malicious_delta_inv_share_;
   } else if (id_ == helper_id_) {
-    out.helper_delta = mac_setup.helper.delta;
-    out.helper_delta_inv = mac_setup.helper.delta_inv;
+    out.helper_delta = helper_delta_;
+    out.helper_delta_inv = helper_delta_inv_;
   }
   out.ready = true;
   return out;
@@ -368,6 +389,7 @@ std::vector<Field> Protocol::mul_online(const std::unordered_map<wire_t, Field>&
 
 std::vector<Field> Protocol::mul_online_semi_honest(
     const std::unordered_map<wire_t, Field>& inputs, const MulOfflineData& offline_data) {
+  resetOnlineTimingStats();
   if (!offline_data.ready) {
     throw std::runtime_error("mul_online requires ready MulOfflineData from mul_offline");
   }
@@ -408,6 +430,7 @@ std::vector<Field> Protocol::mul_online_semi_honest(
     }
 
     if (!mul_gates.empty()) {
+      const auto local_compute_start = std::chrono::steady_clock::now();
       std::vector<OpenPair> local_pairs(mul_gates.size());
       for (size_t i = 0; i < mul_gates.size(); ++i) {
         if (mul_idx + i >= offline_data.triples.size()) {
@@ -418,8 +441,13 @@ std::vector<Field> Protocol::mul_online_semi_honest(
         local_pairs[i].d = wire_share_[g->in1] - t.a;
         local_pairs[i].e = wire_share_[g->in2] - t.b;
       }
+      const auto local_compute_before_open = std::chrono::steady_clock::now();
+      online_timing_stats_.local_compute_ms +=
+          std::chrono::duration<double, std::milli>(local_compute_before_open - local_compute_start)
+              .count();
 
       auto opened = openPairsToComputingParties(local_pairs);
+      const auto local_compute_after_open = std::chrono::steady_clock::now();
       for (size_t i = 0; i < mul_gates.size(); ++i) {
         const auto* g = mul_gates[i];
         const auto& t = offline_data.triples[mul_idx + i];
@@ -429,6 +457,11 @@ std::vector<Field> Protocol::mul_online_semi_honest(
         }
         wire_share_[g->out] = out;
       }
+      const auto local_compute_end = std::chrono::steady_clock::now();
+      online_timing_stats_.local_compute_ms +=
+          std::chrono::duration<double, std::milli>(local_compute_end - local_compute_after_open)
+              .count();
+      online_timing_stats_.ready = true;
       mul_idx += mul_gates.size();
     }
   }
@@ -503,11 +536,16 @@ std::vector<Field> Protocol::mul_online_malicious(
       const Field e_delta_share = delta_wire_share[g->in2] - auth.b_prime;
       const Field f_share = d_delta_share * e_delta_share - auth.c_prime;
 
-      const Field d = openToComputingParties(d_share);
-      const Field e = openToComputingParties(e_share);
-      const Field d_delta = openToComputingParties(d_delta_share);
-      const Field e_delta = openToComputingParties(e_delta_share);
-      const Field f = openToComputingParties(f_share);
+      const std::vector<Field> opened_batch =
+          openVectorToComputingParties({d_share, e_share, d_delta_share, e_delta_share, f_share});
+      if (opened_batch.size() != 5) {
+        throw std::runtime_error("malicious online batched-open failed");
+      }
+      const Field d = opened_batch[0];
+      const Field e = opened_batch[1];
+      const Field d_delta = opened_batch[2];
+      const Field e_delta = opened_batch[3];
+      const Field f = opened_batch[4];
 
       Field xy_share = e * t.a + d * t.b + t.c;
       if (id_ == 0) {
@@ -1039,6 +1077,19 @@ std::vector<Field> Protocol::online(const std::unordered_map<wire_t, Field>& inp
   return mul_online(inputs, off);
 }
 
+std::vector<Field> Protocol::onlineSemiHonestForBenchmark(
+    const std::unordered_map<wire_t, Field>& inputs,
+    const std::vector<TripleShare>& triples) {
+  MulOfflineData off;
+  off.triples = triples;
+  off.ready = true;
+  return mul_online_semi_honest(inputs, off);
+}
+
+void Protocol::resetOnlineTimingStats() {
+  online_timing_stats_ = OnlineTimingStats{};
+}
+
 std::vector<Field> Protocol::probabilisticTruncate(const std::vector<Field>& x_shares, size_t ell_x,
                                                    size_t m, size_t s) {
   auto off = trunc_offline(x_shares.size(), ell_x, m, s);
@@ -1058,12 +1109,18 @@ std::vector<Protocol::OpenPair> Protocol::openPairsToComputingParties(
   }
 
   const auto peers = computingPeerIdsExcludingSelf();
+  const auto network_phase_start = std::chrono::steady_clock::now();
   // Full-duplex model: peer send/recv overlap in one open round.
   maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers.size());
   sendFieldVectorToPeers(peers, send_buf);
 
   std::vector<OpenPair> sums = local_pairs;
   auto recv_all = recvFieldVectorsFromPeers(peers, send_buf.size());
+  const auto network_phase_end = std::chrono::steady_clock::now();
+  auto* self = const_cast<Protocol*>(this);
+  self->online_timing_stats_.network_overhead_ms +=
+      std::chrono::duration<double, std::milli>(network_phase_end - network_phase_start).count();
+  self->online_timing_stats_.ready = true;
   for (const auto& recv_buf : recv_all) {
     for (size_t i = 0; i < local_pairs.size(); ++i) {
       sums[i].d += recv_buf[2 * i];

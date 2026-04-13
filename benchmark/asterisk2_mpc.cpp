@@ -127,15 +127,25 @@ void benchmark(const bpo::variables_map& opts) {
 
     network->sync();
     StatsPoint offline_start(*network);
-    auto triples = proto.offline();
+    auto off_data = proto.mul_offline();
     StatsPoint offline_end(*network);
 
     network->sync();
     StatsPoint online_start(*network);
     std::vector<Field> local_outputs;
     std::vector<Field> local_trunc_outputs;
-    if (pid < nP) {
-      local_outputs = proto.online(inputs, triples);
+    asterisk2::OnlineTimingStats online_timing_stats{};
+    if (security_model == asterisk2::SecurityModel::kSemiHonest) {
+      if (pid < nP) {
+        local_outputs = proto.onlineSemiHonestForBenchmark(inputs, off_data.triples);
+        online_timing_stats = proto.onlineTimingStats();
+      }
+    } else {
+      // Malicious online path requires helper participation (e.g., input sharing).
+      auto out = proto.mul_online(inputs, off_data);
+      if (pid < nP) {
+        local_outputs = std::move(out);
+      }
     }
     StatsPoint online_end(*network);
 
@@ -223,6 +233,8 @@ void benchmark(const bpo::variables_map& opts) {
         {"offline_comm_count", offline_comm_count},
         {"online_comm_rounds", online_comm_rounds},
         {"online_send_count", online_send_count},
+        {"online_local_compute_ms", online_timing_stats.local_compute_ms},
+        {"online_network_overhead_ms", online_timing_stats.network_overhead_ms},
         {"comm_model_round_ms", comm_model_round_ms},
         {"comm_model_total_ms", comm_model_total_ms},
         // keep online_comm_count for compatibility; now it denotes rounds.

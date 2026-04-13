@@ -4,6 +4,10 @@
 > (`mul_*`, `trunc_*`, `compare_*`) so preprocessing and online rounds can be benchmarked separately.
 > In Asterisk2.0 open rounds, the network simulation now follows a full-duplex overlap model:
 > send/recv in the same open round are accounted once as one round latency + bandwidth cost.
+> In semi-honest mode, `asterisk2_mpc` reports online time from the direct
+> `mul_online_semi_honest()` path.
+> It also reports online-time breakdown fields:
+> `online_local_compute_ms` and `online_network_overhead_ms`.
 
 Environment:
 - parties: `n=3` computing + `1` helper

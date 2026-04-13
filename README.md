@@ -23,7 +23,7 @@ cd Asterisk
 ```sh
 sudo apt-get update
 sudo apt-get install -y \
-  build-essential cmake git pkg-config \
+  build-essential ccache cmake git pkg-config \
   libgmp-dev libntl-dev libboost-all-dev nlohmann-json3-dev libssl-dev
 ```
 
@@ -45,6 +45,12 @@ sudo cmake --install /tmp/emp-tool-master/build
 ### 3) 编译项目
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)" --target benchmarks tests
+
+# 推荐：启用 ccache 以加速重复编译
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build -j"$(nproc)" --target benchmarks tests
 ```
 
@@ -118,6 +124,8 @@ On Ubuntu, you can install all required dependencies (including `emp-tool`) with
 ./scripts/install_deps_ubuntu.sh
 ```
 
+该脚本会安装 `ccache`，并在构建 `emp-tool` 时启用 compiler launcher。
+
 If GitHub cloning is restricted in your environment, you can use the official
 EMP installer script:
 
@@ -130,7 +138,9 @@ Then compile:
 
 ```sh
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
 make -j"$(nproc)" tests benchmarks
 ```
 
@@ -156,6 +166,7 @@ This starts party IDs `0..3` locally and stores logs under:
 - `KeyManager` 当前维护两类会话密钥：helper<->party pairwise key，以及仅计算方共享的 `K_P`（用于 `compare_offline` 共享掩码/置换生成）。
 - malicious 输入分享已接入：按 `x' = x + r + t` 与 helper 补足 share 的流程生成 `[x]`/`[Δx]`（当前输入 owner 约定为 `P0`）；一致性检查改由单元测试覆盖。
 - malicious 乘法离线预处理已接入 authenticated tuple：除 `[a],[b],[ab]` 外，还会生成 `[a'],[b'],[c'],[a'b'],[a'c'],[b'c'],[a'b'c']` 的 additive shares。
+- `Pi_MACSetup-DH` 现在在 malicious 模式协议初始化阶段执行一次；后续 `mul_offline_malicious` 仅复用已缓存的 `[Δ]/[Δ^{-1}]` 份额。
 - `mul_online_malicious` 当前按门级在线流程打开 `d,e,d_Δ,e_Δ,f`，并在本地同步组装 `[xy]` 与 `[Δxy]`（已移除旧的 helper 端输出重构一致性检查路径）。
 - 当前仍在开发：Ver-DH、deferred batch verify、fair release、trunc/compare 的 malicious 验证管线。
 
@@ -196,6 +207,9 @@ Execute the following commands from the `build` directory created during compila
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5
 # 安全模型参数（semi-honest 完整可用；malicious 为开发中实验路径）
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 --security-model semi-honest
+# 说明：benchmark 内部会按安全模型走对应的 mul_offline/mul_online 路径，
+# 以保留 malicious 所需的离线材料（不仅是 triples）。
+# 在 malicious 模式下，helper 也会参与 online 流程（例如输入分享阶段）。
 # 可选：代码层仿真网络（每个通信步骤增加延迟/带宽上限）
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 \
   --sim-latency-ms 2 --sim-bandwidth-mbps 50
@@ -206,6 +220,10 @@ Execute the following commands from the `build` directory created during compila
 # 可选：自定义通信代价模型参数（单位：bps / ms）
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 \
   --bandwidth-bps 100000000 --latency-ms 20
+
+# semi-honest 模式会额外输出在线阶段细分时间：
+# - online_local_compute_ms
+# - online_network_overhead_ms
 
 # The `asterisk_mpc` script in the repository root can be used to run the programs 
 # for all parties from the same terminal.
