@@ -6,6 +6,7 @@
 - [partial] 用文档与脚本把该模型沉淀为后续任务可直接复用的工程接口。
 
 ## 2) 当前进度（已完成 / 部分完成 / 未开始）
+- [done] 已补充仓库级开发执行清单（依赖检查 / 阶段进度更新 / 构建验证 / 文档同步），并同步更新 README，降低后续任务交接成本。
 - [done] 新增 C++ 头文件 `src/utils/network_cost_model.h`，提供：
   - `presetNetworkCostModel()`（`lan`/`wan`/`none`）
   - `resolveNetworkCostModel()`（预设 + 显式参数覆盖）
