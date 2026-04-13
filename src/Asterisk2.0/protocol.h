@@ -84,6 +84,23 @@ struct CompareOfflineData {
   bool ready{false};
 };
 
+struct CompareOfflineDataMalicious {
+  size_t lx{0};
+  size_t s{0};
+  std::vector<Field> r_share;
+  std::vector<Field> r0_share;
+  std::vector<Field> delta_r_share;
+  std::vector<Field> delta_r0_share;
+  Field delta_share{Field(0)};
+  CompareMaskData cmp_data;
+  bool ready{false};
+};
+
+struct AuthCompareResult {
+  Field gtez_share{Field(0)};
+  Field delta_gtez_share{Field(0)};
+};
+
 enum class SecurityModel {
   kSemiHonest,
   kMalicious,
@@ -133,6 +150,12 @@ class Protocol {
                                      bool force_t = false, bool forced_t_value = false);
   Field compare_online(const Field& x_share, const CompareOfflineData& offline_data,
                        BGTEZStats* stats = nullptr);
+  CompareOfflineDataMalicious compare_offline_malicious(size_t lx, size_t s,
+                                                        bool force_t = false,
+                                                        bool forced_t_value = false);
+  AuthCompareResult compare_online_malicious(
+      const Field& x_share, const Field& delta_x_share,
+      const CompareOfflineDataMalicious& offline_data);
 
   std::vector<TripleShare> offline();
 

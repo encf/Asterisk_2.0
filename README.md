@@ -169,7 +169,8 @@ This starts party IDs `0..3` locally and stores logs under:
 - `Pi_MACSetup-DH` 现在在 malicious 模式协议初始化阶段执行一次；后续 `mul_offline_malicious` 仅复用已缓存的 `[Δ]/[Δ^{-1}]` 份额。
 - `mul_online_malicious` 当前按门级在线流程打开 `d,e,d_Δ,e_Δ,f`，并在本地同步组装 `[xy]` 与 `[Δxy]`（已移除旧的 helper 端输出重构一致性检查路径）。
 - 已新增 malicious 认证概率截断 split 接口：`trunc_offline_malicious(...)` 与 `trunc_online_malicious(...)`，可从 `[x],[Δx]` 输出 `[Trunc_m(x)],[ΔTrunc_m(x)]`。
-- 当前仍在开发：Ver-DH、deferred batch verify、fair release、compare 的 malicious 验证管线。
+- 已新增 malicious 认证比较 split 接口：`compare_offline_malicious(...)` 与 `compare_online_malicious(...)`，输入 `[x],[Δx]` 输出 `[GTEZ(x)],[ΔGTEZ(x)]`，在线流程固定为 3 轮。
+- 当前仍在开发：Ver-DH、deferred batch verify、fair release。
 
 ## Usage
 A short description of the compiled programs is given below.
