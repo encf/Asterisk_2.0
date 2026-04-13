@@ -259,7 +259,6 @@ MulOfflineData Protocol::mul_offline_semi_honest(const std::vector<FIn2Gate>& mu
       }
 
       std::vector<Field> pack = {a - sum_a, b - sum_b, c - sum_c};
-      maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
       network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
     }
 
@@ -352,7 +351,6 @@ MulOfflineData Protocol::mul_offline_malicious(const std::vector<FIn2Gate>& mul_
       batch_pack[10 * g + 8] = b_prime_c_prime - sum_b_prime_c_prime;
       batch_pack[10 * g + 9] = a_prime_b_prime_c_prime - sum_a_prime_b_prime_c_prime;
     }
-    maybeSimulateStep(batch_pack.size() * common::utils::FIELDSIZE);
     network_->send(nP_ - 1, batch_pack.data(), batch_pack.size() * common::utils::FIELDSIZE);
     network_->flush();
   } else if (id_ == nP_ - 1) {
@@ -624,7 +622,6 @@ MaliciousInputShareData Protocol::buildMaliciousInputShares(
         }
 
         Field pack[2] = {x_plus_r - sum_x_plus_r, delta_x_plus_r - sum_delta_x_plus_r};
-        maybeSimulateStep(2 * common::utils::FIELDSIZE);
         network_->send(nP_ - 1, pack, 2 * common::utils::FIELDSIZE);
         network_->flush();
       } else {
@@ -657,7 +654,6 @@ MaliciousInputShareData Protocol::buildMaliciousInputShares(
           const auto it = inputs.find(w);
           const Field x = (it == inputs.end()) ? Field(0) : it->second;
           const Field x_prime = x + r + t;
-          maybeSimulateStep(common::utils::FIELDSIZE);
           network_->send(helper_id_, &x_prime, common::utils::FIELDSIZE);
           network_->flush();
         }
@@ -737,7 +733,6 @@ TruncOfflineData Protocol::trunc_offline(size_t batch_size, size_t ell_x, size_t
       }
 
       Field pack[2] = {r - sum_r, r0 - sum_r0};
-      maybeSimulateStep(2 * common::utils::FIELDSIZE);
       network_->send(nP_ - 1, pack, 2 * common::utils::FIELDSIZE);
     }
     network_->flush();
@@ -832,7 +827,6 @@ CompareOfflineData Protocol::compare_offline(size_t lx, size_t s, bool force_t,
       pack[2 * (j - 1)] = r - sum_r;
       pack[2 * (j - 1) + 1] = r0 - sum_r0;
     }
-    maybeSimulateStep(pack.size() * common::utils::FIELDSIZE);
     network_->send(nP_ - 1, pack.data(), pack.size() * common::utils::FIELDSIZE);
     network_->flush();
   } else if (id_ <= nP_ - 2) {
@@ -1048,7 +1042,6 @@ Field Protocol::compare_online(const Field& x_share, const CompareOfflineData& o
   // Round 2: computing parties send shuffled candidate shares to helper.
   if (id_ < helper_id_) {
     const auto payload = serializeFieldVector(helper_payload);
-    maybeSimulateStep(payload.size());
     auto* channel = network_->getSendChannel(helper_id_);
     channel->send_data(payload.data(), payload.size());
     channel->flush();
@@ -1111,7 +1104,6 @@ std::vector<Protocol::OpenPair> Protocol::openPairsToComputingParties(
   const auto peers = computingPeerIdsExcludingSelf();
   const auto network_phase_start = std::chrono::steady_clock::now();
   // Full-duplex model: peer send/recv overlap in one open round.
-  maybeSimulateStep(send_buf.size() * common::utils::FIELDSIZE * peers.size());
   sendFieldVectorToPeers(peers, send_buf);
 
   std::vector<OpenPair> sums = local_pairs;
@@ -1138,7 +1130,6 @@ Field Protocol::openToComputingParties(const Field& local_share) const {
   const auto peers = computingPeerIdsExcludingSelf();
   std::vector<Field> local_vec = {local_share};
   // Full-duplex model: this open is one round (send+recv overlap).
-  maybeSimulateStep(common::utils::FIELDSIZE * peers.size());
   sendFieldVectorToPeers(peers, local_vec);
 
   Field opened = local_share;
@@ -1161,7 +1152,6 @@ std::vector<Field> Protocol::openVectorToComputingParties(const std::vector<Fiel
   std::vector<Field> opened = local_vec;
   const size_t bytes = local_vec.size() * common::utils::FIELDSIZE;
   // Full-duplex model: this batched open is one round (send+recv overlap).
-  maybeSimulateStep(bytes * peers.size());
   sendFieldVectorToPeers(peers, local_vec);
 
   auto recv_all = recvFieldVectorsFromPeers(peers, local_vec.size());
@@ -1245,29 +1235,6 @@ Field Protocol::bgtezCompare(const Field& x_share, size_t lx, size_t s, bool for
                              bool forced_t_value, BGTEZStats* stats) {
   auto off = compare_offline(lx, s, force_t, forced_t_value);
   return compare_online(x_share, off, stats);
-}
-
-void Protocol::maybeSimulateStep(size_t aggregate_bytes) const {
-  maybeSimulateLatency();
-  maybeSimulateBandwidth(aggregate_bytes);
-}
-
-void Protocol::maybeSimulateLatency() const {
-  if (config_.sim_latency_ms > 0) {
-    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(
-        config_.sim_latency_ms));
-  }
-}
-
-void Protocol::maybeSimulateBandwidth(size_t bytes) const {
-  if (config_.sim_bandwidth_mbps <= 0 || bytes == 0) {
-    return;
-  }
-  const double bits = static_cast<double>(bytes) * 8.0;
-  const double seconds = bits / (config_.sim_bandwidth_mbps * 1e6);
-  if (seconds > 0) {
-    std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
-  }
 }
 
 }  // namespace asterisk2

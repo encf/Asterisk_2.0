@@ -50,8 +50,6 @@ void benchmark(const bpo::variables_map& opts) {
   auto repeat = opts["repeat"].as<size_t>();
   auto port = opts["port"].as<int>();
   auto security_model_str = opts["security-model"].as<std::string>();
-  auto sim_latency_ms = opts["sim-latency-ms"].as<double>();
-  auto sim_bandwidth_mbps = opts["sim-bandwidth-mbps"].as<double>();
   auto parallel_send = opts["parallel-send"].as<bool>();
   auto net_preset = opts["net-preset"].as<std::string>();
   auto bandwidth_bps = opts["bandwidth-bps"].as<uint64_t>();
@@ -109,8 +107,6 @@ void benchmark(const bpo::variables_map& opts) {
                             {"seed", seed},
                             {"repeat", repeat},
                             {"security_model", security_model_str},
-                            {"sim_latency_ms", sim_latency_ms},
-                            {"sim_bandwidth_mbps", sim_bandwidth_mbps},
                             {"parallel_send", parallel_send},
                             {"net_preset", net_preset},
                             {"bandwidth_bps", net_model.bandwidth_bps},
@@ -120,8 +116,6 @@ void benchmark(const bpo::variables_map& opts) {
   for (size_t r = 0; r < repeat; ++r) {
     asterisk2::ProtocolConfig cfg;
     cfg.security_model = security_model;
-    cfg.sim_latency_ms = sim_latency_ms;
-    cfg.sim_bandwidth_mbps = sim_bandwidth_mbps;
     cfg.parallel_send = parallel_send;
     asterisk2::Protocol proto(nP, pid, network, circ, static_cast<int>(seed), cfg);
 
@@ -273,10 +267,6 @@ bpo::options_description programOptions() {
       ("localhost", bpo::bool_switch(), "All parties are on same machine.")
       ("security-model", bpo::value<std::string>()->default_value("semi-honest"),
        "Security model: semi-honest or malicious.")
-      ("sim-latency-ms", bpo::value<double>()->default_value(0.0),
-       "Simulated per-step latency in milliseconds.")
-      ("sim-bandwidth-mbps", bpo::value<double>()->default_value(0.0),
-       "Simulated bandwidth cap in Mbps (<=0 disables).")
       ("parallel-send", bpo::bool_switch()->default_value(false),
        "Enable parallel peer send/recv for sufficiently wide levels; report one logical send per round.")
       ("net-preset", bpo::value<std::string>()->default_value("none"),

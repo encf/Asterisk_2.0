@@ -210,9 +210,6 @@ Execute the following commands from the `build` directory created during compila
 # 说明：benchmark 内部会按安全模型走对应的 mul_offline/mul_online 路径，
 # 以保留 malicious 所需的离线材料（不仅是 triples）。
 # 在 malicious 模式下，helper 也会参与 online 流程（例如输入分享阶段）。
-# 可选：代码层仿真网络（每个通信步骤增加延迟/带宽上限）
-./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 \
-  --sim-latency-ms 2 --sim-bandwidth-mbps 50
 # 可选：开启在线阶段并行对端发送/接收，并按并行链路口径统计发送次数
 ./benchmarks/asterisk2_mpc -p $PID --localhost -g 100 -d 10 -n 5 --parallel-send
 # 可选：通信代价模型预设（LAN/WAN）
@@ -332,10 +329,6 @@ wait
 
 当前实现已在在线阶段做按层 batched-open（把该层所有乘法门的 `d/e`
 打包后一次发送/接收）以降低 RTT 开销。
-
-若你无法使用 `tc/netem`（例如容器缺少 `NET_ADMIN` 权限），可直接使用
-`--sim-latency-ms` 和 `--sim-bandwidth-mbps` 在代码层做网络开销仿真。
-当前仿真模型按通信步骤(step)估算：`step_time = 传播延迟(一次) + 该步骤总传输字节/带宽`。
 
 本仓库内一次实际跑数结果可见：`docs_asterisk2_benchmark.md`。
 

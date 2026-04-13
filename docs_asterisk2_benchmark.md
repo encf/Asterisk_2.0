@@ -2,8 +2,6 @@
 
 > Note: the protocol implementation has been refactored into explicit offline/online APIs
 > (`mul_*`, `trunc_*`, `compare_*`) so preprocessing and online rounds can be benchmarked separately.
-> In Asterisk2.0 open rounds, the network simulation now follows a full-duplex overlap model:
-> send/recv in the same open round are accounted once as one round latency + bandwidth cost.
 > In semi-honest mode, `asterisk2_mpc` reports online time from the direct
 > `mul_online_semi_honest()` path.
 > It also reports online-time breakdown fields:
@@ -18,13 +16,11 @@ Environment:
 
 ## Commands
 ```sh
-# Optional network simulation in code path:
-#   --sim-latency-ms 2 --sim-bandwidth-mbps 50
 # Optional communication-cost model preset:
 #   --net-preset lan   (or wan)
 for pid in 0 1 2 3; do
   ./benchmarks/asterisk2_mpc --localhost -n 3 -p "$pid" -g 1 -d 100 -r 1 \
-    --security-model semi-honest --sim-latency-ms 0 --sim-bandwidth-mbps 0 --parallel-send \
+    --security-model semi-honest --parallel-send \
     -o /tmp/asterisk2_chain100_p"$pid".json &
 done
 wait
@@ -105,22 +101,7 @@ Validation rule used by the script:
   - Asterisk (current implementation path): two aggregation exchanges per depth for multiplication values,
     i.e. about `2 * depth = 200` interaction rounds in this test shape.
 
-## Simulated network run (latency=2ms, bandwidth=50Mbps)
-
-Command parameters:
-- Asterisk2.0: `--sim-latency-ms 2 --sim-bandwidth-mbps 50`
-- Asterisk online baseline: `--sim-latency-ms 2 --sim-bandwidth-mbps 50 --sim-rounds-per-depth 2`
-
-Observed averages (n=3 computing parties, g=1, d=100):
-- Asterisk2.0 online raw time: `448.591495 ms`
-- Asterisk2.0 online bytes: `400`
-- Asterisk online raw time: `6.678695 ms`
-- Asterisk online simulated time: `406.764029 ms`
-- Asterisk online bytes: `533.33`
-- With `--parallel-send`, Asterisk2.0 uses parallel peer send/recv during batched-open, and
-  `online_send_count` is reported with parallel-link accounting (one logical send per round).
-  For narrow levels (e.g., `g=1`), runtime automatically falls back to serial I/O to avoid
-  thread-management overhead.
-- If communication-cost model options are enabled (`--net-preset` or custom
-  `--bandwidth-bps/--latency-ms`), benchmark output also includes:
-  `comm_model_round_ms` and `comm_model_total_ms`.
+With `--parallel-send`, Asterisk2.0 uses parallel peer send/recv during batched-open, and
+`online_send_count` is reported with parallel-link accounting (one logical send per round).
+For narrow levels (e.g., `g=1`), runtime automatically falls back to serial I/O to avoid
+thread-management overhead.

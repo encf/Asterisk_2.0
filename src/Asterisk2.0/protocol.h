@@ -82,10 +82,6 @@ enum class SecurityModel {
 
 struct ProtocolConfig {
   SecurityModel security_model{SecurityModel::kSemiHonest};
-  // Simulated network latency per communication step in milliseconds.
-  double sim_latency_ms{0.0};
-  // Simulated bandwidth cap in megabits per second (<=0 disables).
-  double sim_bandwidth_mbps{0.0};
   // Enable parallel peer send/recv in each communication step.
   bool parallel_send{false};
   // TODO(malicious): move pairwise/shared-key generation to Asterisk-style
@@ -169,9 +165,6 @@ class Protocol {
                                                             size_t len) const;
   void sendFieldVectorToPeers(const std::vector<int>& peers, const std::vector<Field>& data) const;
   std::vector<int> computingPeerIdsExcludingSelf() const;
-  void maybeSimulateStep(size_t aggregate_bytes) const;
-  void maybeSimulateLatency() const;
-  void maybeSimulateBandwidth(size_t bytes) const;
   void resetOnlineTimingStats();
   void initializeMaliciousMacSetup();
 
