@@ -141,6 +141,29 @@ tc qdisc show dev eth0
   --security-model semi-honest --bandwidth-bps 100000000 --latency-ms 20
 ```
 
+### 9) 比较协议对比脚本（Asterisk / Asterisk2.0 SH / Asterisk2.0 malicious）
+新增脚本：`scripts/compare_cmp_protocols.sh`，输出三方对比表：
+- offline communication（MB）
+- offline time（s）
+- online communication（MB）
+- online time（s）
+
+```sh
+# 示例：n=3 个计算方，比较次数=20
+./scripts/compare_cmp_protocols.sh -n 3 -c 20
+
+# 可调参数（含 lx/slack）
+./scripts/compare_cmp_protocols.sh --help
+```
+
+参数说明：
+- `-n/--num-parties`：计算方数量
+- `-c/--compare-count`：比较次数（Asterisk2.0 BGTEZ 使用 repeat 跑多次比较）
+
+> 备注：当前仓库里 Asterisk（旧协议）没有独立 BGTEZ benchmark 二进制，
+> 脚本中的 `Asterisk (baseline)` 使用现有 `asterisk_offline` + `asterisk_online`
+> 作为基线口径进行 offline/online 通信与时间对比。
+
 ## External Dependencies
 The following libraries need to be installed separately and should be available to the build system and compiler.
 

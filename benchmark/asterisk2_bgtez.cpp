@@ -3,6 +3,7 @@
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <memory>
+#include <unordered_map>
 
 #include "utils.h"
 #include "Asterisk2.0/protocol.h"
@@ -21,28 +22,39 @@ void benchmark(const bpo::variables_map& opts) {
   const auto lx = opts["lx"].as<size_t>();
   const auto slack = opts["slack"].as<size_t>();
   const auto x_clear = opts["x-clear"].as<int64_t>();
+  const auto security_model_str = opts["security-model"].as<std::string>();
+  asterisk2::SecurityModel security_model = asterisk2::SecurityModel::kSemiHonest;
+  if (security_model_str == "malicious") {
+    security_model = asterisk2::SecurityModel::kMalicious;
+  } else if (security_model_str != "semi-honest") {
+    throw std::runtime_error("Unsupported security-model, expected semi-honest or malicious");
+  }
 
   if (!opts["localhost"].as<bool>()) {
     throw std::runtime_error("BGTEZ benchmark currently supports localhost only");
   }
 
   auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, port, nullptr, true);
-  common::utils::Circuit<Field> empty;
-  auto level_circ = empty.orderGatesByLevel();
+  common::utils::Circuit<Field> input_circ;
+  auto w0 = input_circ.newInputWire();
+  auto level_circ = input_circ.orderGatesByLevel();
 
   json output_data;
   output_data["details"] = {{"num-parties", nP},
                             {"pid", pid},
                             {"seed", seed},
                             {"repeat", repeat},
+                            {"security_model", security_model_str},
                             {"lx", lx},
                             {"slack", slack},
                             {"x_clear", x_clear}};
   output_data["benchmarks"] = json::array();
 
   for (size_t r = 0; r < repeat; ++r) {
+    asterisk2::ProtocolConfig cfg;
+    cfg.security_model = security_model;
     asterisk2::Protocol proto(static_cast<int>(nP), static_cast<int>(pid), network, level_circ,
-                              static_cast<int>(seed));
+                              static_cast<int>(seed), cfg);
 
     Field x_share = Field(0);
     if (pid < nP) {
@@ -51,14 +63,37 @@ void benchmark(const bpo::variables_map& opts) {
 
     network->sync();
     StatsPoint offline_start(*network);
-    auto cmp_offline = proto.compare_offline(lx, slack, false, false);
+    asterisk2::CompareOfflineData cmp_offline;
+    asterisk2::CompareOfflineDataMalicious cmp_offline_mal;
+    if (security_model == asterisk2::SecurityModel::kSemiHonest) {
+      cmp_offline = proto.compare_offline(lx, slack, false, false);
+    } else {
+      cmp_offline_mal = proto.compare_offline_malicious(lx, slack, false, false);
+    }
     StatsPoint offline_end(*network);
     auto offline_bench = offline_end - offline_start;
 
     network->sync();
     StatsPoint online_start(*network);
     asterisk2::BGTEZStats stats;
-    Field out_share = proto.compare_online(x_share, cmp_offline, &stats);
+    Field out_share = Field(0);
+    if (security_model == asterisk2::SecurityModel::kSemiHonest) {
+      out_share = proto.compare_online(x_share, cmp_offline, &stats);
+    } else {
+      std::unordered_map<common::utils::wire_t, Field> inputs;
+      inputs[w0] = (pid == 0) ? Field(x_clear) : Field(0);
+      auto mul_off = proto.mul_offline();
+      network->sync();
+      auto auth_in = proto.maliciousInputShareForTesting(inputs, mul_off);
+      Field local_x = Field(0);
+      Field local_dx = Field(0);
+      if (pid < nP) {
+        local_x = auth_in.x_shares.at(w0);
+        local_dx = auth_in.delta_x_shares.at(w0);
+      }
+      auto auth_out = proto.compare_online_malicious(local_x, local_dx, cmp_offline_mal);
+      out_share = auth_out.gtez_share;
+    }
     StatsPoint online_end(*network);
     auto online_bench = online_end - online_start;
 
@@ -92,6 +127,8 @@ bpo::options_description programOptions() {
       ("num-parties,n", bpo::value<size_t>()->required(), "Number of computing parties.")
       ("pid,p", bpo::value<size_t>()->required(), "Party ID.")
       ("seed", bpo::value<size_t>()->default_value(200), "Value of the random seed.")
+      ("security-model", bpo::value<std::string>()->default_value("semi-honest"),
+       "Security model: semi-honest or malicious.")
       ("repeat,r", bpo::value<size_t>()->default_value(1), "Number of repetitions.")
       ("lx", bpo::value<size_t>()->default_value(16), "Bit-length parameter lx.")
       ("slack", bpo::value<size_t>()->default_value(8), "Statistical slack parameter s.")
