@@ -87,6 +87,7 @@ wait
 
 ### 6) 常见报错速查
 - **`Could not find ... emp-toolConfig.cmake`**：EMP Tool 没安装成功，回到第 2 步重新安装。
+- **`Could not find ... GMPConfig.cmake` / `FindGMP.cmake`**：先确认已安装 `libgmp-dev`，再从仓库根目录重新执行 `cmake -S . -B build ...`。
 - **`Address already in use`**：端口冲突；换 `--port` 或等上次进程退出。
 - **多进程卡住**：通常是某个 `pid` 没启动齐（`0..n` 必须全起）。
 

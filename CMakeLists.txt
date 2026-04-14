@@ -9,13 +9,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "-march=native -maes -mrdseed -g")
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
 
-# Path to custom cmake files for external libs
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+# Path to custom cmake files for external libs.
+# Use CMAKE_CURRENT_LIST_DIR so this works both as top-level project and subproject.
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 # Find external dependencies
-find_package(GMP REQUIRED)
+find_package(GMP REQUIRED MODULE)
 find_package(Threads REQUIRED)
 find_package(Boost 1.72.0 COMPONENTS unit_test_framework program_options system REQUIRED)
 find_package(emp-tool REQUIRED)

@@ -97,6 +97,9 @@
   - 统一使用 `cmake -S/-B` + `cmake --build`；
   - 删除重复/易混淆的 `make <target>` 与旧目录切换写法；
   - 增加 `ctest --test-dir build` 的基础验证步骤。
+- [done] 处理 GMP 查找失败兼容性：
+  - `CMakeLists.txt` 改为 `list(PREPEND CMAKE_MODULE_PATH \"${CMAKE_CURRENT_LIST_DIR}/cmake\")`；
+  - `find_package(GMP REQUIRED MODULE)` 强制走仓库内 `FindGMP.cmake`，避免部分环境优先 Config 模式导致找不到 GMP。
 - [done] 实机验证：
   - `cmake -S . -B build_fresh ... && cmake --build build_fresh --target benchmarks tests`
   - `./build_fresh/benchmarks/asterisk_mpc --help`
