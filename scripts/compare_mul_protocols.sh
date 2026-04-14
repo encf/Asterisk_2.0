@@ -68,6 +68,7 @@ run_multiparty() {
   local -a cmd=("$@")
   local run_dir="${OUT_DIR}/${tag}"
   mkdir -p "${run_dir}"
+  rm -f "${run_dir}"/p*.json
   local -a pids=()
   for pid in $(seq 0 "${N}"); do
     local out_json="${run_dir}/p${pid}.json"
@@ -111,7 +112,18 @@ MB = 1024 * 1024
 def load_party_jsons(tag):
     run_dir = out_dir / tag
     files = [run_dir / f"p{pid}.json" for pid in range(n + 1)]
-    return [json.loads(p.read_text()) for p in files]
+    docs = []
+    for p in files:
+        text = p.read_text().strip()
+        if not text:
+            raise RuntimeError(f"Empty benchmark output: {p}")
+        lines = [line for line in text.splitlines() if line.strip()]
+        try:
+            docs.append(json.loads(text))
+        except json.JSONDecodeError:
+            # Some benchmark binaries append one JSON document per run.
+            docs.append(json.loads(lines[-1]))
+    return docs
 
 def summarize_split_mode(tag, bench_key_time="time"):
     # For asterisk_offline / asterisk_online style:
