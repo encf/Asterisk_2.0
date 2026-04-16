@@ -8,7 +8,8 @@ N=3
 COMPARE_COUNT=10
 LX=16
 SLACK=8
-BASE_PORT=41000
+BASE_PORT=""
+LABEL=""
 OUT_DIR="${ROOT_DIR}/run_logs/compare_protocols"
 
 usage() {
@@ -25,10 +26,103 @@ Options:
   -c, --compare-count <int>  Number of comparisons (default: 10)
   --lx <int>                 BGTEZ lx parameter (default: 16)
   --slack <int>              BGTEZ slack parameter s (default: 8)
-  -p, --base-port <int>      Base port for first run (default: 41000)
+  -p, --base-port <int>      Base port for the first run (default: auto-pick)
+  --label <text>             Optional scenario label for the summary output
   -o, --out-dir <path>       Output directory (default: run_logs/compare_protocols)
   -h, --help                 Show help
 EOF
+}
+
+compute_port_stride() {
+  local total_parties=$1
+  python3 - "$total_parties" <<'PY'
+import sys
+n_total = int(sys.argv[1])
+print(2 * n_total * n_total + 64)
+PY
+}
+
+pick_free_base_port() {
+  local width=$1
+  python3 - "$width" <<'PY'
+import socket
+import sys
+
+START = 30000
+END = 65000
+WIDTH = int(sys.argv[1])
+STRIDE = 16
+
+def range_is_free(base):
+    sockets = []
+    try:
+        for port in range(base, base + WIDTH):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("0.0.0.0", port))
+            sockets.append(s)
+        return True
+    except OSError:
+        return False
+    finally:
+        for s in sockets:
+            s.close()
+
+for base in range(START, END - WIDTH + 1, STRIDE):
+    if range_is_free(base):
+        print(base)
+        break
+else:
+    raise SystemExit("Could not find a free port range for comparison benchmark")
+PY
+}
+
+ensure_base_port_available() {
+  local base_port="$1"
+  local width="$2"
+  python3 - "$base_port" "$width" <<'PY'
+import socket
+import sys
+
+base = int(sys.argv[1])
+width = int(sys.argv[2])
+if base < 1024 or base + width - 1 > 65535:
+    raise SystemExit(f"Invalid base port {base}: need a free range up to {base + width - 1} within 1024..65535")
+
+sockets = []
+try:
+    for port in range(base, base + width):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("0.0.0.0", port))
+        sockets.append(s)
+except OSError as exc:
+    raise SystemExit(f"Base port {base} is not usable: {exc}")
+finally:
+    for s in sockets:
+        s.close()
+PY
+}
+
+wait_for_jobs() {
+  local -a jobs=("$@")
+  local idx
+  for idx in "${!jobs[@]}"; do
+    local pid="${jobs[$idx]}"
+    if ! wait "${pid}"; then
+      local status=$?
+      local j
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          kill "${jobs[$j]}" 2>/dev/null || true
+        fi
+      done
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          wait "${jobs[$j]}" 2>/dev/null || true
+        fi
+      done
+      return "${status}"
+    fi
+  done
 }
 
 while [[ $# -gt 0 ]]; do
@@ -38,54 +132,97 @@ while [[ $# -gt 0 ]]; do
     --lx) LX="$2"; shift 2 ;;
     --slack) SLACK="$2"; shift 2 ;;
     -p|--base-port) BASE_PORT="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
     -o|--out-dir) OUT_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
 
-mkdir -p "${OUT_DIR}"
+if [[ -n "${LABEL}" ]]; then
+  RUN_OUT_DIR="${OUT_DIR}/${LABEL}"
+else
+  RUN_OUT_DIR="${OUT_DIR}/run_$(date +%Y%m%d_%H%M%S)"
+fi
 
-cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache >/dev/null
-cmake --build "${BUILD_DIR}" -j"$(nproc)" --target benchmarks >/dev/null
+mkdir -p "${RUN_OUT_DIR}"
+
+for bin in asterisk_offline asterisk_online asterisk2_bgtez; do
+  if [[ ! -x "${BUILD_DIR}/benchmarks/${bin}" ]]; then
+    echo "Missing benchmark binary: ${BUILD_DIR}/benchmarks/${bin}" >&2
+    echo "Please build benchmarks first, for example:" >&2
+    echo "  cmake -S \"${ROOT_DIR}\" -B \"${BUILD_DIR}\" -DCMAKE_BUILD_TYPE=Release" >&2
+    echo "  cmake --build \"${BUILD_DIR}\" -j\$(nproc) --target benchmarks" >&2
+    exit 1
+  fi
+done
+
+TOTAL_PARTIES=$((N + 1))
+PORT_STRIDE="$(compute_port_stride "${TOTAL_PARTIES}")"
+
+if [[ -n "${BASE_PORT}" ]]; then
+  ensure_base_port_available "${BASE_PORT}" "$((4 * PORT_STRIDE))"
+fi
 
 run_multiparty() {
   local tag="$1"
-  local port="$2"
+  local port="${2:-}"
   shift 2
   local -a cmd=("$@")
-  local run_dir="${OUT_DIR}/${tag}"
+  local run_dir="${RUN_OUT_DIR}/${tag}"
+  local log_dir="${run_dir}/logs"
+  if [[ -z "${port}" ]]; then
+    port="$(pick_free_base_port "${PORT_STRIDE}")"
+  fi
+  echo "[RUN] tag=${tag}, compare_count=${COMPARE_COUNT}, port=${port}"
   rm -rf "${run_dir}"
-  mkdir -p "${run_dir}"
+  mkdir -p "${log_dir}"
   local -a jobs=()
   for pid in $(seq 0 "${N}"); do
     "${cmd[@]}" --localhost -n "${N}" -p "${pid}" --port "${port}" -o "${run_dir}/p${pid}.json" \
-      >/tmp/"${tag}_p${pid}".log 2>&1 &
+      >"${log_dir}/p${pid}.log" 2>&1 &
     jobs+=("$!")
   done
-  for j in "${jobs[@]}"; do wait "${j}"; done
+  wait_for_jobs "${jobs[@]}"
+  echo "[DONE] tag=${tag}"
 }
 
-# Asterisk baseline: use compare_count as depth surrogate.
-run_multiparty "asterisk_offline" "${BASE_PORT}" \
-  "${BUILD_DIR}/benchmarks/asterisk_offline" -g 1 -d "${COMPARE_COUNT}" -r 1
-run_multiparty "asterisk_online" "$((BASE_PORT + 200))" \
-  "${BUILD_DIR}/benchmarks/asterisk_online" -g 1 -d "${COMPARE_COUNT}" -r 1
+if [[ -n "${BASE_PORT}" ]]; then
+  run_multiparty "asterisk_offline" "${BASE_PORT}" \
+    "${BUILD_DIR}/benchmarks/asterisk_offline" -g 1 -d "${COMPARE_COUNT}" -r 1
+  run_multiparty "asterisk_online" "$((BASE_PORT + PORT_STRIDE))" \
+    "${BUILD_DIR}/benchmarks/asterisk_online" -g 1 -d "${COMPARE_COUNT}" -r 1
+  run_multiparty "asterisk2_bgtez_sh" "$((BASE_PORT + 2 * PORT_STRIDE))" \
+    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
+    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
+  run_multiparty "asterisk2_bgtez_mal" "$((BASE_PORT + 3 * PORT_STRIDE))" \
+    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
+    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
+else
+  run_multiparty "asterisk_offline" "" \
+    "${BUILD_DIR}/benchmarks/asterisk_offline" -g 1 -d "${COMPARE_COUNT}" -r 1
+  run_multiparty "asterisk_online" "" \
+    "${BUILD_DIR}/benchmarks/asterisk_online" -g 1 -d "${COMPARE_COUNT}" -r 1
+  run_multiparty "asterisk2_bgtez_sh" "" \
+    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
+    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
+  run_multiparty "asterisk2_bgtez_mal" "" \
+    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
+    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
+fi
 
-# Asterisk2 BGTEZ compare: compare_count comparisons via repeat.
-run_multiparty "asterisk2_bgtez_sh" "$((BASE_PORT + 400))" \
-  "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
-  --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-run_multiparty "asterisk2_bgtez_mal" "$((BASE_PORT + 600))" \
-  "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
-  --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-
-python - "${OUT_DIR}" "${N}" <<'PY'
-import json, pathlib, statistics, sys
+python3 - "${RUN_OUT_DIR}" "${N}" "${COMPARE_COUNT}" "${LABEL}" "${LX}" "${SLACK}" <<'PY'
+import json
+import pathlib
+import statistics
+import sys
 
 out_dir = pathlib.Path(sys.argv[1])
 n = int(sys.argv[2])
+compare_count = int(sys.argv[3])
+label = sys.argv[4]
+lx = int(sys.argv[5])
+slack = int(sys.argv[6])
 MB = 1024 * 1024
 
 def read_rows(tag):
@@ -130,13 +267,48 @@ a_on_c, a_on_t = summarize_asterisk_split("asterisk_online")
 sh = summarize_bgtez("asterisk2_bgtez_sh")
 mal = summarize_bgtez("asterisk2_bgtez_mal")
 
-print("\n=== Compare Protocol Benchmark Summary ===")
+summary = {
+    "label": label,
+    "num_parties": n,
+    "compare_count": compare_count,
+    "parameters": {
+        "lx": lx,
+        "slack": slack,
+        "x_clear": 123,
+    },
+    "asterisk_baseline": {
+        "offline_comm_mb": a_off_c,
+        "offline_time_s": a_off_t,
+        "online_comm_mb": a_on_c,
+        "online_time_s": a_on_t,
+    },
+    "asterisk2_semi_honest": {
+        "offline_comm_mb": sh[0],
+        "offline_time_s": sh[1],
+        "online_comm_mb": sh[2],
+        "online_time_s": sh[3],
+    },
+    "asterisk2_malicious": {
+        "offline_comm_mb": mal[0],
+        "offline_time_s": mal[1],
+        "online_comm_mb": mal[2],
+        "online_time_s": mal[3],
+    },
+}
+
+(out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+
+title = "=== Compare Protocol Benchmark Summary ==="
+if label:
+    title += f" [{label}]"
+print("\n" + title)
 print("| Protocol | Offline Comm (MB) | Offline Time (s) | Online Comm (MB) | Online Time (s) |")
 print("|---|---:|---:|---:|---:|")
 print(f"| Asterisk (baseline) | {a_off_c:.6f} | {a_off_t:.6f} | {a_on_c:.6f} | {a_on_t:.6f} |")
 print(f"| Asterisk2.0 semi-honest (BGTEZ) | {sh[0]:.6f} | {sh[1]:.6f} | {sh[2]:.6f} | {sh[3]:.6f} |")
 print(f"| Asterisk2.0 malicious (BGTEZ) | {mal[0]:.6f} | {mal[1]:.6f} | {mal[2]:.6f} | {mal[3]:.6f} |")
+print(f"\n[INFO] Machine-readable summary: {out_dir / 'summary.json'}")
 PY
 
 echo
-echo "[DONE] Raw JSON written to: ${OUT_DIR}"
+echo "[DONE] Raw JSON written to: ${RUN_OUT_DIR}"
