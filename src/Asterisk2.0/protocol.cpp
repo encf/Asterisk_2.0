@@ -1113,30 +1113,21 @@ Field Protocol::compare_online(const Field& x_share, const CompareOfflineData& o
     }
     Field bit = (opened_x >= 0 || any_zero) ? Field(1) : Field(0);
 
-    std::vector<Field> back(helper_id_, Field(0));
     Field partial = Field(0);
     for (int p = 0; p <= helper_id_ - 2; ++p) {
-      auto prg = makePrg(seed_, helper_id_, static_cast<uint64_t>(p), PrgLabel::kCmpHelperShare);
-      back[p] = prgField(prg);
-      partial += back[p];
+      auto prg =
+          makePrgFromPairwiseKey(key_manager_.keyForParty(p), 0, PrgLabel::kCmpHelperShare);
+      partial += prgField(prg);
     }
-    back[helper_id_ - 1] = bit - partial;
+    const Field residual_share = bit - partial;
 
-    // Round 3 send (parallelized).
-    std::vector<std::thread> send_threads;
-    send_threads.reserve(peers.size());
-    for (int peer : peers) {
-      send_threads.emplace_back([&, peer]() {
-        auto* channel = network_->getSendChannel(peer);
-        std::vector<uint8_t> payload(common::utils::FIELDSIZE);
-        NTL::BytesFromZZ(payload.data(), NTL::conv<NTL::ZZ>(back[peer]), common::utils::FIELDSIZE);
-        channel->send_data(payload.data(), payload.size());
-        channel->flush();
-      });
-    }
-    for (auto& th : send_threads) {
-      th.join();
-    }
+    // Round 3: parties 0..n-2 derive their output shares locally from the
+    // helper pairwise key, so only the residual share for the last party is sent.
+    std::vector<uint8_t> payload(common::utils::FIELDSIZE);
+    NTL::BytesFromZZ(payload.data(), NTL::conv<NTL::ZZ>(residual_share), common::utils::FIELDSIZE);
+    auto* channel = network_->getSendChannel(helper_id_ - 1);
+    channel->send_data(payload.data(), payload.size());
+    channel->flush();
     return Field(0);
   }
 
@@ -1219,13 +1210,19 @@ Field Protocol::compare_online(const Field& x_share, const CompareOfflineData& o
     channel->flush();
   }
 
-  // Round 3: helper sends back secret shares of comparison bit.
+  // Round 3: parties 0..n-2 derive their shares locally; the last party
+  // receives the residual share from the helper.
   Field bit_share = Field(0);
-  std::vector<uint8_t> recv_payload(common::utils::FIELDSIZE);
-  auto* recv_channel = network_->getRecvChannel(helper_id_);
-  recv_channel->recv_data(recv_payload.data(), recv_payload.size());
-  bit_share = NTL::conv<Field>(
-      NTL::ZZFromBytes(recv_payload.data(), common::utils::FIELDSIZE));
+  if (id_ <= helper_id_ - 2) {
+    auto prg = makePrgFromPairwiseKey(key_manager_.keyWithHelper(), 0, PrgLabel::kCmpHelperShare);
+    bit_share = prgField(prg);
+  } else {
+    std::vector<uint8_t> recv_payload(common::utils::FIELDSIZE);
+    auto* recv_channel = network_->getRecvChannel(helper_id_);
+    recv_channel->recv_data(recv_payload.data(), recv_payload.size());
+    bit_share = NTL::conv<Field>(
+        NTL::ZZFromBytes(recv_payload.data(), common::utils::FIELDSIZE));
+  }
   Field t_share = (id_ == 0 && t) ? Field(1) : Field(0);
   return t_share + bit_share - Field(2) * (t ? bit_share : Field(0));
 }
@@ -1418,17 +1415,19 @@ AuthCompareResult Protocol::compare_online_malicious(
     g_share[helper_id_ - 1] = gtez_prime - sum_g;
     dg_share[helper_id_ - 1] = delta_gtez_prime - sum_dg;
 
-    // Round 3: helper broadcasts verdict and sends residual share to last computing party.
+    // Round 3: helper broadcasts the verdict to all parties, while only the
+    // last party receives the residual output share pair.
     for (int p = 0; p < helper_id_; ++p) {
-      std::vector<uint8_t> payload(1 + 2 * common::utils::FIELDSIZE, 0);
-      payload[0] = verdict;
-      if (p == helper_id_ - 1 && verdict == 1) {
-        NTL::BytesFromZZ(payload.data() + 1, NTL::conv<NTL::ZZ>(g_share[p]), common::utils::FIELDSIZE);
-        NTL::BytesFromZZ(payload.data() + 1 + common::utils::FIELDSIZE, NTL::conv<NTL::ZZ>(dg_share[p]),
-                         common::utils::FIELDSIZE);
-      }
       auto* ch = network_->getSendChannel(p);
-      ch->send_data(payload.data(), payload.size());
+      ch->send_data(&verdict, sizeof(verdict));
+      if (p == helper_id_ - 1 && verdict == 1) {
+        std::vector<uint8_t> residual_payload(2 * common::utils::FIELDSIZE, 0);
+        NTL::BytesFromZZ(residual_payload.data(), NTL::conv<NTL::ZZ>(g_share[p]),
+                         common::utils::FIELDSIZE);
+        NTL::BytesFromZZ(residual_payload.data() + common::utils::FIELDSIZE,
+                         NTL::conv<NTL::ZZ>(dg_share[p]), common::utils::FIELDSIZE);
+        ch->send_data(residual_payload.data(), residual_payload.size());
+      }
       ch->flush();
     }
     return out;
@@ -1520,9 +1519,9 @@ AuthCompareResult Protocol::compare_online_malicious(
     channel->flush();
   }
 
-  std::vector<uint8_t> recv_payload(1 + 2 * common::utils::FIELDSIZE, 0);
-  network_->recv(helper_id_, recv_payload.data(), recv_payload.size());
-  if (recv_payload[0] == 0) {
+  uint8_t verdict = 0;
+  network_->recv(helper_id_, &verdict, sizeof(verdict));
+  if (verdict == 0) {
     throw std::runtime_error("compare_online_malicious aborted by helper");
   }
 
@@ -1534,10 +1533,13 @@ AuthCompareResult Protocol::compare_online_malicious(
     gtez_prime_share = prgField(g_prg);
     delta_gtez_prime_share = prgField(dg_prg);
   } else {
+    std::vector<uint8_t> residual_payload(2 * common::utils::FIELDSIZE, 0);
+    network_->recv(helper_id_, residual_payload.data(), residual_payload.size());
     gtez_prime_share = NTL::conv<Field>(
-        NTL::ZZFromBytes(recv_payload.data() + 1, common::utils::FIELDSIZE));
+        NTL::ZZFromBytes(residual_payload.data(), common::utils::FIELDSIZE));
     delta_gtez_prime_share = NTL::conv<Field>(
-        NTL::ZZFromBytes(recv_payload.data() + 1 + common::utils::FIELDSIZE, common::utils::FIELDSIZE));
+        NTL::ZZFromBytes(residual_payload.data() + common::utils::FIELDSIZE,
+                         common::utils::FIELDSIZE));
   }
 
   const bool t = offline_data.cmp_data.t;

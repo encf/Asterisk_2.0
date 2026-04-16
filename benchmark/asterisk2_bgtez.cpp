@@ -73,6 +73,20 @@ void benchmark(const bpo::variables_map& opts) {
     StatsPoint offline_end(*network);
     auto offline_bench = offline_end - offline_start;
 
+    Field local_x = Field(0);
+    Field local_dx = Field(0);
+    if (security_model == asterisk2::SecurityModel::kMalicious) {
+      std::unordered_map<common::utils::wire_t, Field> inputs;
+      inputs[w0] = (pid == 0) ? Field(x_clear) : Field(0);
+      auto mul_off = proto.mul_offline();
+      network->sync();
+      auto auth_in = proto.maliciousInputShareForTesting(inputs, mul_off);
+      if (pid < nP) {
+        local_x = auth_in.x_shares.at(w0);
+        local_dx = auth_in.delta_x_shares.at(w0);
+      }
+    }
+
     network->sync();
     StatsPoint online_start(*network);
     asterisk2::BGTEZStats stats;
@@ -80,17 +94,6 @@ void benchmark(const bpo::variables_map& opts) {
     if (security_model == asterisk2::SecurityModel::kSemiHonest) {
       out_share = proto.compare_online(x_share, cmp_offline, &stats);
     } else {
-      std::unordered_map<common::utils::wire_t, Field> inputs;
-      inputs[w0] = (pid == 0) ? Field(x_clear) : Field(0);
-      auto mul_off = proto.mul_offline();
-      network->sync();
-      auto auth_in = proto.maliciousInputShareForTesting(inputs, mul_off);
-      Field local_x = Field(0);
-      Field local_dx = Field(0);
-      if (pid < nP) {
-        local_x = auth_in.x_shares.at(w0);
-        local_dx = auth_in.delta_x_shares.at(w0);
-      }
       auto auth_out = proto.compare_online_malicious(local_x, local_dx, cmp_offline_mal);
       out_share = auth_out.gtez_share;
     }

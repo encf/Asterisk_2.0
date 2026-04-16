@@ -147,7 +147,7 @@ fi
 
 mkdir -p "${RUN_OUT_DIR}"
 
-for bin in asterisk_offline asterisk_online asterisk2_bgtez; do
+for bin in asterisk_cmp_offline asterisk_cmp_online asterisk2_bgtez; do
   if [[ ! -x "${BUILD_DIR}/benchmarks/${bin}" ]]; then
     echo "Missing benchmark binary: ${BUILD_DIR}/benchmarks/${bin}" >&2
     echo "Please build benchmarks first, for example:" >&2
@@ -189,9 +189,9 @@ run_multiparty() {
 
 if [[ -n "${BASE_PORT}" ]]; then
   run_multiparty "asterisk_offline" "${BASE_PORT}" \
-    "${BUILD_DIR}/benchmarks/asterisk_offline" -g 1 -d "${COMPARE_COUNT}" -r 1
+    "${BUILD_DIR}/benchmarks/asterisk_cmp_offline" -c "${COMPARE_COUNT}" -r 1
   run_multiparty "asterisk_online" "$((BASE_PORT + PORT_STRIDE))" \
-    "${BUILD_DIR}/benchmarks/asterisk_online" -g 1 -d "${COMPARE_COUNT}" -r 1
+    "${BUILD_DIR}/benchmarks/asterisk_cmp_online" -c "${COMPARE_COUNT}" -r 1
   run_multiparty "asterisk2_bgtez_sh" "$((BASE_PORT + 2 * PORT_STRIDE))" \
     "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
     --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
@@ -200,9 +200,9 @@ if [[ -n "${BASE_PORT}" ]]; then
     --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
 else
   run_multiparty "asterisk_offline" "" \
-    "${BUILD_DIR}/benchmarks/asterisk_offline" -g 1 -d "${COMPARE_COUNT}" -r 1
+    "${BUILD_DIR}/benchmarks/asterisk_cmp_offline" -c "${COMPARE_COUNT}" -r 1
   run_multiparty "asterisk_online" "" \
-    "${BUILD_DIR}/benchmarks/asterisk_online" -g 1 -d "${COMPARE_COUNT}" -r 1
+    "${BUILD_DIR}/benchmarks/asterisk_cmp_online" -c "${COMPARE_COUNT}" -r 1
   run_multiparty "asterisk2_bgtez_sh" "" \
     "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
     --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"

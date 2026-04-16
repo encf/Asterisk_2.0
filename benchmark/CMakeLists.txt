@@ -15,6 +15,8 @@ add_benchmark(asterisk2_mpc)
 add_benchmark(asterisk2_bgtez)
 add_benchmark(asterisk_online)
 add_benchmark(asterisk_offline)
+add_benchmark(asterisk_cmp_online)
+add_benchmark(asterisk_cmp_offline)
 add_benchmark(assistedmpc_offline)
 
 add_custom_target(benchmarks)
