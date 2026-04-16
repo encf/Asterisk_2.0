@@ -124,16 +124,22 @@ PY
 
 wait_for_jobs() {
   local -a jobs=("$@")
-  local remaining=${#jobs[@]}
-  while (( remaining > 0 )); do
-    if wait -n; then
-      remaining=$((remaining - 1))
-    else
+  local idx
+  for idx in "${!jobs[@]}"; do
+    local pid="${jobs[$idx]}"
+    if ! wait "${pid}"; then
       local status=$?
-      for pid in "${jobs[@]}"; do
-        kill "${pid}" 2>/dev/null || true
+      local j
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          kill "${jobs[$j]}" 2>/dev/null || true
+        fi
       done
-      wait "${jobs[@]}" 2>/dev/null || true
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          wait "${jobs[$j]}" 2>/dev/null || true
+        fi
+      done
       return "${status}"
     fi
   done
@@ -161,7 +167,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "${OUT_DIR}"
+if [[ -n "${LABEL}" ]]; then
+  RUN_OUT_DIR="${OUT_DIR}/${LABEL}"
+else
+  RUN_OUT_DIR="${OUT_DIR}/run_$(date +%Y%m%d_%H%M%S)"
+fi
+
+mkdir -p "${RUN_OUT_DIR}"
 TOTAL_PARTIES=$((N + 1))
 CASE_PORT_STRIDE="$(compute_case_port_stride "${TOTAL_PARTIES}")"
 TOTAL_PORT_WIDTH=$((4 * CASE_PORT_STRIDE))
@@ -186,7 +198,7 @@ run_case() {
   local gates="$3"
   local repeat="$4"
   local port="$5"
-  local run_dir="${OUT_DIR}/${model}/${case_tag}"
+  local run_dir="${RUN_OUT_DIR}/${model}/${case_tag}"
   local log_dir="${run_dir}/logs"
   echo "[RUN] model=${model}, case=${case_tag}, gates=${gates}, repeat=${repeat}, port=${port}"
   rm -rf "${run_dir}"
@@ -217,7 +229,7 @@ run_model() {
 run_model semi-honest "${BASE_PORT}"
 run_model malicious "$((BASE_PORT + 2 * CASE_PORT_STRIDE))"
 
-python3 - "${OUT_DIR}" "${N}" "${BATCH_SIZE}" "${LABEL}" "${ELL_X}" "${FRAC_BITS}" "${SLACK}" "${SINGLE_REPEAT}" "${BATCH_REPEAT}" <<'PY'
+python3 - "${RUN_OUT_DIR}" "${N}" "${BATCH_SIZE}" "${LABEL}" "${ELL_X}" "${FRAC_BITS}" "${SLACK}" "${SINGLE_REPEAT}" "${BATCH_REPEAT}" <<'PY'
 import json
 import pathlib
 import statistics
@@ -314,4 +326,4 @@ print(f"[INFO] Machine-readable summary: {out_dir / 'summary.json'}")
 PY
 
 echo
-echo "[DONE] Raw JSON written to: ${OUT_DIR}"
+echo "[DONE] Raw JSON written to: ${RUN_OUT_DIR}"
