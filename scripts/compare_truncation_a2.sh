@@ -176,12 +176,9 @@ fi
 mkdir -p "${RUN_OUT_DIR}"
 TOTAL_PARTIES=$((N + 1))
 CASE_PORT_STRIDE="$(compute_case_port_stride "${TOTAL_PARTIES}")"
-TOTAL_PORT_WIDTH=$((4 * CASE_PORT_STRIDE))
 
-if [[ -z "${BASE_PORT}" ]]; then
-  BASE_PORT="$(pick_free_base_port "${TOTAL_PARTIES}" "${TOTAL_PORT_WIDTH}")"
-else
-  ensure_base_port_available "${BASE_PORT}" "${TOTAL_PORT_WIDTH}"
+if [[ -n "${BASE_PORT}" ]]; then
+  ensure_base_port_available "${BASE_PORT}" "$((4 * CASE_PORT_STRIDE))"
 fi
 
 if [[ ! -x "${BUILD_DIR}/benchmarks/asterisk2_mpc" ]]; then
@@ -197,9 +194,12 @@ run_case() {
   local case_tag="$2"
   local gates="$3"
   local repeat="$4"
-  local port="$5"
+  local port="${5:-}"
   local run_dir="${RUN_OUT_DIR}/${model}/${case_tag}"
   local log_dir="${run_dir}/logs"
+  if [[ -z "${port}" ]]; then
+    port="$(pick_free_base_port "${TOTAL_PARTIES}" "${CASE_PORT_STRIDE}")"
+  fi
   echo "[RUN] model=${model}, case=${case_tag}, gates=${gates}, repeat=${repeat}, port=${port}"
   rm -rf "${run_dir}"
   mkdir -p "${log_dir}"
@@ -221,13 +221,23 @@ run_case() {
 
 run_model() {
   local model="$1"
-  local port_base="$2"
-  run_case "${model}" single 1 "${SINGLE_REPEAT}" "${port_base}"
-  run_case "${model}" batch "${BATCH_SIZE}" "${BATCH_REPEAT}" "$((port_base + CASE_PORT_STRIDE))"
+  local port_base="${2:-}"
+  if [[ -n "${port_base}" ]]; then
+    run_case "${model}" single 1 "${SINGLE_REPEAT}" "${port_base}"
+    run_case "${model}" batch "${BATCH_SIZE}" "${BATCH_REPEAT}" "$((port_base + CASE_PORT_STRIDE))"
+  else
+    run_case "${model}" single 1 "${SINGLE_REPEAT}"
+    run_case "${model}" batch "${BATCH_SIZE}" "${BATCH_REPEAT}"
+  fi
 }
 
-run_model semi-honest "${BASE_PORT}"
-run_model malicious "$((BASE_PORT + 2 * CASE_PORT_STRIDE))"
+if [[ -n "${BASE_PORT}" ]]; then
+  run_model semi-honest "${BASE_PORT}"
+  run_model malicious "$((BASE_PORT + 2 * CASE_PORT_STRIDE))"
+else
+  run_model semi-honest
+  run_model malicious
+fi
 
 python3 - "${RUN_OUT_DIR}" "${N}" "${BATCH_SIZE}" "${LABEL}" "${ELL_X}" "${FRAC_BITS}" "${SLACK}" "${SINGLE_REPEAT}" "${BATCH_REPEAT}" <<'PY'
 import json
