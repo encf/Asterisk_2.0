@@ -184,9 +184,10 @@ run_case() {
   local repeat="$4"
   local port="$5"
   local run_dir="${OUT_DIR}/${model}/${case_tag}"
+  local log_dir="${run_dir}/logs"
   echo "[RUN] model=${model}, case=${case_tag}, gates=${gates}, repeat=${repeat}, port=${port}"
   rm -rf "${run_dir}"
-  mkdir -p "${run_dir}"
+  mkdir -p "${log_dir}"
   local -a jobs=()
 
   for pid in $(seq 0 "${N}"); do
@@ -195,7 +196,7 @@ run_case() {
       --security-model "${model}" \
       --trunc-frac-bits "${FRAC_BITS}" --trunc-lx "${ELL_X}" --trunc-slack "${SLACK}" \
       --dump-output-shares \
-      -o "${run_dir}/p${pid}.json" >/tmp/"trunc_${model}_${case_tag}_p${pid}".log 2>&1 &
+      -o "${run_dir}/p${pid}.json" >"${log_dir}/p${pid}.log" 2>&1 &
     jobs+=("$!")
   done
 
