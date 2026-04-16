@@ -65,17 +65,20 @@ pick_free_base_port() {
 import socket
 import sys
 
-START = 54000
+START = 20000
 END = 65000
 WIDTH = int(sys.argv[2])
-STRIDE = WIDTH
+# Search more densely than WIDTH-sized jumps. Otherwise one occupied port inside
+# each probed block can make us miss many valid ranges on long-running hosts.
+STRIDE = 16
 
 def range_is_free(base):
     sockets = []
     try:
         for port in range(base, base + WIDTH):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind(("127.0.0.1", port))
+            # NetIO listens on 0.0.0.0, so probe the same bind scope here.
+            s.bind(("0.0.0.0", port))
             sockets.append(s)
         return True
     except OSError:
@@ -109,7 +112,7 @@ sockets = []
 try:
     for port in range(base, base + width):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("127.0.0.1", port))
+        s.bind(("0.0.0.0", port))
         sockets.append(s)
 except OSError as exc:
     raise SystemExit(f"Base port {base} is not usable: {exc}")
