@@ -39,6 +39,29 @@ Optional:
 EOF
 }
 
+wait_for_jobs() {
+  local -a jobs=("$@")
+  local idx
+  for idx in "${!jobs[@]}"; do
+    local pid="${jobs[$idx]}"
+    if ! wait "${pid}"; then
+      local status=$?
+      local j
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          kill "${jobs[$j]}" 2>/dev/null || true
+        fi
+      done
+      for j in "${!jobs[@]}"; do
+        if (( j > idx )); then
+          wait "${jobs[$j]}" 2>/dev/null || true
+        fi
+      done
+      return "${status}"
+    fi
+  done
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n)
@@ -134,6 +157,7 @@ echo "slack=${SLACK}"
 echo "port=${PORT}"
 echo
 
+jobs=()
 for pid in $(seq 0 "${NUM_PARTIES}"); do
   "${BIN}" \
     --localhost \
@@ -151,8 +175,9 @@ for pid in $(seq 0 "${NUM_PARTIES}"); do
     --port "${PORT}" \
     -o "${RAW_DIR}/p${pid}.json" \
     > "${RAW_DIR}/p${pid}.log" 2>&1 &
+  jobs+=("$!")
 done
-wait
+wait_for_jobs "${jobs[@]}"
 
 python3 - "${RAW_DIR}" "${NUM_PARTIES}" "${SECURITY_MODEL}" <<'PY'
 import json
@@ -169,34 +194,49 @@ for f in files:
         raise SystemExit(f"missing output file: {f}")
 
 parties = [json.loads(f.read_text().strip().splitlines()[-1]) for f in files]
-bench = [p["benchmarks"][0] for p in parties]
 expected = parties[0]["expected_outputs"]
-reconstructed = []
-reconstructed_delta = []
-for i in range(len(expected)):
-    s = 0
-    ds = 0
-    for pid in range(n):
-        s = (s + int(bench[pid]["output_shares"][i])) % prime
-        if security_model == "malicious":
-            ds = (ds + int(bench[pid]["output_delta_shares"][i])) % prime
-    reconstructed.append(s)
-    if security_model == "malicious":
-        reconstructed_delta.append(ds)
+reps = len(parties[0]["benchmarks"])
+if any(len(p["benchmarks"]) != reps for p in parties):
+    raise SystemExit("inconsistent benchmark repetition counts across parties")
 
-print("expected      =", expected)
-print("reconstructed =", reconstructed)
-print("matches       =", reconstructed == expected)
-if security_model == "malicious":
-    delta = None
-    for idx, val in enumerate(expected):
-        if val != 0:
-            delta = reconstructed_delta[idx] * pow(val, -1, prime) % prime
-            break
-    if delta is None:
-        delta = 0
-    mac_ok = reconstructed_delta == [((delta * x) % prime) for x in expected]
-    print("delta_shares  =", reconstructed_delta)
-    print("mac_matches   =", mac_ok)
+overall_ok = True
+for rep in range(reps):
+    bench = [p["benchmarks"][rep] for p in parties]
+    reconstructed = []
+    reconstructed_delta = []
+    for i in range(len(expected)):
+        s = 0
+        ds = 0
+        for pid in range(n):
+            s = (s + int(bench[pid]["output_shares"][i])) % prime
+            if security_model == "malicious":
+                ds = (ds + int(bench[pid]["output_delta_shares"][i])) % prime
+        reconstructed.append(s)
+        if security_model == "malicious":
+            reconstructed_delta.append(ds)
+
+    matches = reconstructed == expected
+    print(f"repetition {rep + 1}:")
+    print("expected      =", expected)
+    print("reconstructed =", reconstructed)
+    print("matches       =", matches)
+    overall_ok = overall_ok and matches
+    if security_model == "malicious":
+        nonzero_idx = next((idx for idx, val in enumerate(expected) if val != 0), None)
+        if nonzero_idx is None:
+            mac_ok = all(ds == 0 for ds in reconstructed_delta)
+            print("delta_shares  =", reconstructed_delta)
+            print("mac_matches   =", mac_ok, "(zero-output case: checked reconstructed delta shares are all zero)")
+        else:
+            delta = reconstructed_delta[nonzero_idx] * pow(expected[nonzero_idx], -1, prime) % prime
+            mac_ok = reconstructed_delta == [((delta * x) % prime) for x in expected]
+            print("delta_shares  =", reconstructed_delta)
+            print("mac_matches   =", mac_ok)
+        overall_ok = overall_ok and mac_ok
+    if rep + 1 != reps:
+        print("")
+
+if not overall_ok:
+    raise SystemExit("CDA correctness check failed")
 print("raw_dir       =", root)
 PY

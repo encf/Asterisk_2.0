@@ -112,7 +112,7 @@ void benchmark(const bpo::variables_map& opts) {
 
       network->sync();
       StatsPoint online_start(*network);
-      outputs = eval.online(shared_inputs, offline_data);
+      outputs = eval.onlineBatched(shared_inputs, offline_data);
       StatsPoint online_end(*network);
       online_bench = online_end - online_start;
     } else {
@@ -125,7 +125,7 @@ void benchmark(const bpo::variables_map& opts) {
 
       network->sync();
       StatsPoint online_start(*network);
-      outputs = eval.online(shared_inputs, offline_data);
+      outputs = eval.onlineBatched(shared_inputs, offline_data);
       StatsPoint online_end(*network);
       online_bench = online_end - online_start;
 

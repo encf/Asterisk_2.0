@@ -8,8 +8,8 @@ OUT_DIR="${ROOT_DIR}/run_logs/cda_paper_grid"
 BANDWIDTH="100mbit"
 DELAYS_MS=(20 50)
 PARTIES=(5 10 16)
-BUY_SIZE=32
-SELL_SIZE=32
+BUY_SIZE=50
+SELL_SIZE=50
 NEW_ORDER_NAME=1
 NEW_ORDER_UNIT=1
 NEW_ORDER_PRICE=1
@@ -27,12 +27,13 @@ Usage: scripts/run_cda_paper_grid.sh [options]
 Run the paper's CDA experiment grid on localhost loopback:
   - one-way delay: 20ms, 50ms
   - participants: 5, 10, 16
-  - M = N = 32
+  - buy list size M = 50
+  - sell list size N = 50
 
 Options:
   --bandwidth <rate>            tc rate, e.g. 100mbit (default: 100mbit)
-  -b, --buy-size <int>          Buy list size M (default: 32)
-  -s, --sell-size <int>         Sell list size N (default: 32)
+  -b, --buy-size <int>          Buy list size M (default: 50)
+  -s, --sell-size <int>         Sell list size N (default: 50)
   --new-order-name <int>        Deterministic new-order name input (default: 1)
   --new-order-unit <int>        Deterministic new-order unit input (default: 1)
   --new-order-price <int>       Deterministic new-order price input (default: 1)

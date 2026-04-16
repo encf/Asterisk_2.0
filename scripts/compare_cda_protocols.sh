@@ -299,8 +299,10 @@ def summarize_split(tag):
         "online_time_s": statistics.mean(on_time),
     }
 
+effective_label = label if label else out_dir.name
+
 summary = {
-    "label": label,
+    "label": effective_label,
     "num_parties": n,
     "buy_list_size": buy_size,
     "sell_list_size": sell_size,
@@ -317,7 +319,7 @@ summary = {
 (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 md = [
-    f"=== CDA Benchmark Summary === [{label}]",
+    f"=== CDA Benchmark Summary === [{effective_label}]",
     "| Protocol | Offline Comm (MB) | Offline Time (s) | Online Comm (MB) | Online Time (s) |",
     "|---|---:|---:|---:|---:|",
 ]

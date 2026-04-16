@@ -177,12 +177,23 @@ class Protocol {
   CompareOfflineData compare_offline_tagged(size_t lx, size_t s, uint64_t domain_sep,
                                             bool force_t = false,
                                             bool forced_t_value = false);
+  std::vector<Field> mul_online_semi_honest_batch(
+      const std::vector<Field>& x_shares, const std::vector<Field>& y_shares,
+      const std::vector<const MulOfflineData*>& offline_data_vec);
   Field compare_online(const Field& x_share, const CompareOfflineData& offline_data,
                        BGTEZStats* stats = nullptr);
+  std::vector<Field> compare_online_batch(
+      const std::vector<Field>& x_shares,
+      const std::vector<const CompareOfflineData*>& offline_data_vec,
+      BGTEZStats* stats = nullptr);
   EqzOfflineData eqz_offline(size_t lx, size_t s);
   EqzOfflineData eqz_offline_tagged(size_t lx, size_t s, uint64_t domain_sep);
   Field eqz_online(const Field& x_share, const EqzOfflineData& offline_data,
                    BGTEZStats* stats = nullptr);
+  std::vector<Field> eqz_online_batch(
+      const std::vector<Field>& x_shares,
+      const std::vector<const EqzOfflineData*>& offline_data_vec,
+      BGTEZStats* stats = nullptr);
   CompareOfflineDataMalicious compare_offline_malicious(size_t lx, size_t s,
                                                         bool force_t = false,
                                                         bool forced_t_value = false);
@@ -197,12 +208,22 @@ class Protocol {
       const Field& x_share, const Field& delta_x_share,
       const Field& y_share, const Field& delta_y_share,
       const MulOfflineData& offline_data);
+  std::vector<AuthMulResult> mul_online_malicious_batch(
+      const std::vector<Field>& x_shares, const std::vector<Field>& delta_x_shares,
+      const std::vector<Field>& y_shares, const std::vector<Field>& delta_y_shares,
+      const std::vector<const MulOfflineData*>& offline_data_vec);
   EqzOfflineDataMalicious eqz_offline_malicious(size_t lx, size_t s);
   EqzOfflineDataMalicious eqz_offline_malicious_tagged(size_t lx, size_t s,
                                                        uint64_t domain_sep);
   AuthEqzResult eqz_online_malicious(
       const Field& x_share, const Field& delta_x_share,
       const EqzOfflineDataMalicious& offline_data);
+  std::vector<AuthCompareResult> compare_online_malicious_batch(
+      const std::vector<Field>& x_shares, const std::vector<Field>& delta_x_shares,
+      const std::vector<const CompareOfflineDataMalicious*>& offline_data_vec);
+  std::vector<AuthEqzResult> eqz_online_malicious_batch(
+      const std::vector<Field>& x_shares, const std::vector<Field>& delta_x_shares,
+      const std::vector<const EqzOfflineDataMalicious*>& offline_data_vec);
 
   std::vector<TripleShare> offline();
 
@@ -260,6 +281,7 @@ class Protocol {
   std::vector<Field> wire_share_;
   OnlineTimingStats online_timing_stats_;
   bool malicious_mac_setup_ready_{false};
+  mutable bool malicious_key_material_verified_{false};
   Field malicious_delta_share_{Field(0)};
   Field malicious_delta_inv_share_{Field(0)};
   Field helper_delta_{Field(0)};

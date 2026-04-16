@@ -41,6 +41,8 @@ class SemiHonestAppEvaluator {
   SemiHonestAppOfflineData offline(size_t lx, size_t slack);
   std::vector<Field> online(const std::unordered_map<wire_t, Field>& inputs,
                             const SemiHonestAppOfflineData& offline_data);
+  std::vector<Field> onlineBatched(const std::unordered_map<wire_t, Field>& inputs,
+                                   const SemiHonestAppOfflineData& offline_data);
 
  private:
   static LevelOrderedCircuit singleMulCircuit();
@@ -63,6 +65,8 @@ class MaliciousAppEvaluator {
   MaliciousAppOfflineData offline(size_t lx, size_t slack);
   std::vector<Field> online(const std::unordered_map<wire_t, Field>& inputs,
                             const MaliciousAppOfflineData& offline_data);
+  std::vector<Field> onlineBatched(const std::unordered_map<wire_t, Field>& inputs,
+                                   const MaliciousAppOfflineData& offline_data);
   std::vector<Field> deltaOutputs() const;
 
  private:
