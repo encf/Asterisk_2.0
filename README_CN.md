@@ -51,7 +51,7 @@ sudo bash ./scripts/run_table3_tc.sh --out-dir run_logs/test_mul_paper
   - `run_logs/test_mul_paper/table3_summary.md`
   - `run_logs/test_mul_paper/bw_100mbit_owd_20ms/n5/compare_output.txt`
   - `run_logs/test_mul_paper/bw_100mbit_owd_50ms/n16/compare_output.txt`
-- 说明：该命令直接运行论文里的整数乘法实验网格，即 Net-L / Net-H、`n=5,10,16`、10,000 次连续依赖乘法。
+- 说明：该命令直接运行论文里的整数乘法实验网格，即 Net-L / Net-H、`n=5,10,16`、10,000 次连续依赖乘法。每个参与方的执行日志会写到对应运行目录下的 `logs/` 子目录中。
 
 ### 表 IV：比较协议
 
@@ -82,7 +82,7 @@ sudo ./scripts/run_comparison_paper_grid.sh --out-dir run_logs/test_cmp_paper
 - 关键输出文件：
   - `run_logs/test_fixedpoint_paper/semi-honest/p*.json`
   - `run_logs/test_fixedpoint_paper/malicious/p*.json`
-- 说明：该脚本默认参数现在已经和论文中的 Asterisk 2.0 行一致，即 `n=5`、1,000 次连续定点数乘法。
+- 说明：该脚本默认参数现在已经和论文中的 Asterisk 2.0 行一致，即 `n=5`、1,000 次连续定点数乘法。每个参与方的执行日志会写到 `run_logs/test_fixedpoint_paper/*/logs/` 下。
 
 ### 小节：概率截断
 

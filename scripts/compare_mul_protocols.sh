@@ -67,13 +67,17 @@ run_multiparty() {
   shift 2
   local -a cmd=("$@")
   local run_dir="${OUT_DIR}/${tag}"
+  local log_dir="${run_dir}/logs"
   mkdir -p "${run_dir}"
   rm -f "${run_dir}"/p*.json
+  mkdir -p "${log_dir}"
+  rm -f "${log_dir}"/p*.log
   local -a pids=()
   for pid in $(seq 0 "${N}"); do
     local out_json="${run_dir}/p${pid}.json"
+    local out_log="${log_dir}/p${pid}.log"
     "${cmd[@]}" --localhost -n "${N}" -p "${pid}" --port "${port}" -r "${REPEAT}" -o "${out_json}" \
-      >/tmp/"${tag}_p${pid}".log 2>&1 &
+      >"${out_log}" 2>&1 &
     pids+=("$!")
   done
   for job in "${pids[@]}"; do

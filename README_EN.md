@@ -51,7 +51,7 @@ sudo bash ./scripts/run_table3_tc.sh --out-dir run_logs/test_mul_paper
   - `run_logs/test_mul_paper/table3_summary.md`
   - `run_logs/test_mul_paper/bw_100mbit_owd_20ms/n5/compare_output.txt`
   - `run_logs/test_mul_paper/bw_100mbit_owd_50ms/n16/compare_output.txt`
-- Notes: this command directly runs the paper's integer-multiplication experiment grid, namely Net-L / Net-H, `n=5,10,16`, and 10,000 dependent multiplications.
+- Notes: this command directly runs the paper's integer-multiplication experiment grid, namely Net-L / Net-H, `n=5,10,16`, and 10,000 dependent multiplications. Per-party execution logs are written under each run directory's `logs/` subdirectory.
 
 ### Table IV: comparison
 
@@ -82,7 +82,7 @@ sudo ./scripts/run_comparison_paper_grid.sh --out-dir run_logs/test_cmp_paper
 - Key output files:
   - `run_logs/test_fixedpoint_paper/semi-honest/p*.json`
   - `run_logs/test_fixedpoint_paper/malicious/p*.json`
-- Notes: the script defaults now match the paper's Asterisk 2.0 rows, namely `n=5` and 1,000 consecutive fixed-point multiplications.
+- Notes: the script defaults now match the paper's Asterisk 2.0 rows, namely `n=5` and 1,000 consecutive fixed-point multiplications. Per-party execution logs are written under `run_logs/test_fixedpoint_paper/*/logs/`.
 
 ### Section: probabilistic truncation
 
