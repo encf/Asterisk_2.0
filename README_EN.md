@@ -34,7 +34,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
 
 ## Paper result reproduction map
 
-### Table II: integer multiplication
+### Table II in the paper: integer multiplication
 
 - Script: `scripts/compare_mul_protocols.sh`
 - Minimal command:
@@ -51,7 +51,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
   - `run_logs/reviewer_mul/asterisk2_malicious/p*.json`
 - Notes: the script prints the final comparison table to stdout and saves raw per-party JSON files under the output directory.
 
-### Table Y: comparison
+### Table IV in the paper: comparison
 
 - Script: `scripts/compare_cmp_protocols.sh`
 - Minimal command:
@@ -68,7 +68,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
   - `run_logs/compare_protocols/reviewer_cmp/asterisk2_bgtez_sh/p*.json`
   - `run_logs/compare_protocols/reviewer_cmp/asterisk2_bgtez_mal/p*.json`
 
-### Table Z: fixed-point multiplication
+### Table III in the paper: fixed-point multiplication
 
 - Script: `scripts/compare_fixedpoint_mul_a2.sh`
 - Minimal command:
@@ -83,7 +83,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
   - `run_logs/reviewer_fixedpoint/malicious/p*.json`
 - Notes: the script prints the summary table to stdout; the raw benchmark records are stored in the per-model JSON files above.
 
-### Table/section on truncation
+### Section in the paper: probabilistic truncation
 
 - Script: `scripts/run_truncation_tc_matrix.sh`
 - Minimal command:
@@ -100,7 +100,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
   - `run_logs/reviewer_truncation_matrix/owd50ms_n16/raw/owd50ms_n16/summary.json`
 - Notes: this script configures `tc` on loopback and therefore requires `sudo` in an interactive terminal.
 
-### Dark-pool VM
+### Table V in the paper: volume matching
 
 - Script: `scripts/compare_vm_protocols.sh`
 - Minimal command:
@@ -117,7 +117,7 @@ cmake --build build -j"$(nproc)" --target benchmarks
   - `run_logs/vm_protocols/reviewer_vm/asterisk2_vm_sh/p*.json`
   - `run_logs/vm_protocols/reviewer_vm/asterisk2_vm_dh/p*.json`
 
-### Dark-pool CDA
+### Table VI in the paper: continuous double auction
 
 - Script: `scripts/compare_cda_protocols.sh`
 - Minimal command:
