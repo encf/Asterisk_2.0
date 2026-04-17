@@ -2,6 +2,8 @@
 
 This repository implements the paper's semi-honest and malicious MPF protocols, including comparison, equality testing, probabilistic truncation, and dark-pool benchmarks.
 
+For faithful localhost reproduction, set the number of computing parties \(n\) to be at most the number of available processor threads on the host. Otherwise, local scheduling contention can dominate the measured latency and distort the paper-style results.
+
 ## Mapping to the paper
 
 - `src/Asterisk2.0/`: core protocol implementation of Asterisk 2.0.
@@ -34,105 +36,102 @@ cmake --build build -j"$(nproc)" --target benchmarks
 
 ## Paper result reproduction map
 
-### Table II in the paper: integer multiplication
+### Table II: integer multiplication
 
-- Script: `scripts/compare_mul_protocols.sh`
+- Script: `scripts/run_table3_tc.sh` (paper grid) or `scripts/compare_mul_protocols.sh` (single condition)
 - Minimal command:
 
 ```sh
-./scripts/compare_mul_protocols.sh -n 3 -d 10 -r 3 -o run_logs/reviewer_mul
+sudo bash ./scripts/run_table3_tc.sh --out-dir run_logs/test_mul_paper
 ```
 
-- Output directory: `run_logs/reviewer_mul/`
+- Output directory: `run_logs/test_mul_paper/`
 - Key output files:
-  - `run_logs/reviewer_mul/asterisk_offline/p*.json`
-  - `run_logs/reviewer_mul/asterisk_online/p*.json`
-  - `run_logs/reviewer_mul/asterisk2_semi_honest/p*.json`
-  - `run_logs/reviewer_mul/asterisk2_malicious/p*.json`
-- Notes: the script prints the final comparison table to stdout and saves raw per-party JSON files under the output directory.
+  - `run_logs/test_mul_paper/table3_summary.csv`
+  - `run_logs/test_mul_paper/table3_summary.md`
+  - `run_logs/test_mul_paper/bw_100mbit_owd_20ms/n5/compare_output.txt`
+  - `run_logs/test_mul_paper/bw_100mbit_owd_50ms/n16/compare_output.txt`
+- Notes: this command directly runs the paper's integer-multiplication experiment grid, namely Net-L / Net-H, `n=5,10,16`, and 10,000 dependent multiplications.
 
-### Table IV in the paper: comparison
+### Table IV: comparison
 
-- Script: `scripts/compare_cmp_protocols.sh`
+- Script: `scripts/run_comparison_paper_grid.sh` (paper grid) or `scripts/compare_cmp_protocols.sh` (single condition)
 - Minimal command:
 
 ```sh
-./scripts/compare_cmp_protocols.sh -n 3 -c 20 --label reviewer_cmp
+sudo ./scripts/run_comparison_paper_grid.sh --out-dir run_logs/test_cmp_paper
 ```
 
-- Output directory: `run_logs/compare_protocols/reviewer_cmp/`
+- Output directory: `run_logs/test_cmp_paper/`
 - Key output files:
-  - `run_logs/compare_protocols/reviewer_cmp/summary.json`
-  - `run_logs/compare_protocols/reviewer_cmp/asterisk_offline/p*.json`
-  - `run_logs/compare_protocols/reviewer_cmp/asterisk_online/p*.json`
-  - `run_logs/compare_protocols/reviewer_cmp/asterisk2_bgtez_sh/p*.json`
-  - `run_logs/compare_protocols/reviewer_cmp/asterisk2_bgtez_mal/p*.json`
+  - `run_logs/test_cmp_paper/cmp_owd20ms_n5/raw/summary.json`
+  - `run_logs/test_cmp_paper/cmp_owd20ms_n10/raw/summary.json`
+  - `run_logs/test_cmp_paper/cmp_owd50ms_n16/raw/summary.json`
+- Notes: this command runs the paper's comparison grid, namely Net-L / Net-H, `n=5,10,16`, with one comparison per condition.
 
-### Table III in the paper: fixed-point multiplication
+### Table III: fixed-point multiplication
 
 - Script: `scripts/compare_fixedpoint_mul_a2.sh`
 - Minimal command:
 
 ```sh
-./scripts/compare_fixedpoint_mul_a2.sh -n 3 -c 20 -o run_logs/reviewer_fixedpoint
+./scripts/compare_fixedpoint_mul_a2.sh -o run_logs/test_fixedpoint_paper
 ```
 
-- Output directory: `run_logs/reviewer_fixedpoint/`
+- Output directory: `run_logs/test_fixedpoint_paper/`
 - Key output files:
-  - `run_logs/reviewer_fixedpoint/semi-honest/p*.json`
-  - `run_logs/reviewer_fixedpoint/malicious/p*.json`
-- Notes: the script prints the summary table to stdout; the raw benchmark records are stored in the per-model JSON files above.
+  - `run_logs/test_fixedpoint_paper/semi-honest/p*.json`
+  - `run_logs/test_fixedpoint_paper/malicious/p*.json`
+- Notes: the script defaults now match the paper's Asterisk 2.0 rows, namely `n=5` and 1,000 consecutive fixed-point multiplications.
 
-### Section in the paper: probabilistic truncation
+### Section: probabilistic truncation
 
-- Script: `scripts/run_truncation_tc_matrix.sh`
+- Script: `scripts/run_truncation_paper_grid.sh`
 - Minimal command:
 
 ```sh
-./scripts/run_truncation_tc_matrix.sh --out-dir run_logs/reviewer_truncation_matrix
+sudo ./scripts/run_truncation_paper_grid.sh --out-dir run_logs/test_truncation_paper
 ```
 
-- Output directory: `run_logs/reviewer_truncation_matrix/`
+- Output directory: `run_logs/test_truncation_paper/`
 - Key output files:
-  - `run_logs/reviewer_truncation_matrix/owd20ms_n5/compare_output.txt`
-  - `run_logs/reviewer_truncation_matrix/owd20ms_n5/raw/owd20ms_n5/summary.json`
-  - `run_logs/reviewer_truncation_matrix/owd50ms_n10/raw/owd50ms_n10/summary.json`
-  - `run_logs/reviewer_truncation_matrix/owd50ms_n16/raw/owd50ms_n16/summary.json`
-- Notes: this script configures `tc` on loopback and therefore requires `sudo` in an interactive terminal.
+  - `run_logs/test_truncation_paper/owd20ms_n5/compare_output.txt`
+  - `run_logs/test_truncation_paper/owd20ms_n5/raw/owd20ms_n5/summary.json`
+  - `run_logs/test_truncation_paper/owd50ms_n10/raw/owd50ms_n10/summary.json`
+  - `run_logs/test_truncation_paper/owd50ms_n16/raw/owd50ms_n16/summary.json`
+- Notes: this command runs the paper's truncation grid, namely Net-L / Net-H, `n=5,10,16`, batch size 1,000, and single-latency repeat 5.
 
-### Table V in the paper: volume matching
+### Table V: volume matching
 
-- Script: `scripts/compare_vm_protocols.sh`
+- Script: `scripts/run_vm_paper_grid.sh` (paper grid) or `scripts/compare_vm_protocols.sh` (single condition)
 - Minimal command:
 
 ```sh
-./scripts/compare_vm_protocols.sh --label reviewer_vm
+sudo ./scripts/run_vm_paper_grid.sh --out-dir run_logs/test_vm_paper
 ```
 
-- Output directory: `run_logs/vm_protocols/reviewer_vm/`
+- Output directory: `run_logs/test_vm_paper/`
 - Key output files:
-  - `run_logs/vm_protocols/reviewer_vm/summary.json`
-  - `run_logs/vm_protocols/reviewer_vm/summary.md`
-  - `run_logs/vm_protocols/reviewer_vm/asterisk_vm/p*.json`
-  - `run_logs/vm_protocols/reviewer_vm/asterisk2_vm_sh/p*.json`
-  - `run_logs/vm_protocols/reviewer_vm/asterisk2_vm_dh/p*.json`
+  - `run_logs/test_vm_paper/vm_owd20ms_n5/raw/summary.json`
+  - `run_logs/test_vm_paper/vm_owd20ms_n10/raw/summary.json`
+  - `run_logs/test_vm_paper/vm_owd50ms_n16/raw/summary.json`
+- Notes: this command runs the paper's VM grid with `M=N=32`, unit order size, and `n=5,10,16`.
 
-### Table VI in the paper: continuous double auction
+### Table VI: continuous double auction
 
-- Script: `scripts/compare_cda_protocols.sh`
+- Script: `scripts/run_cda_paper_grid.sh` (paper grid) or `scripts/compare_cda_protocols.sh` (single condition)
 - Minimal command:
 
 ```sh
-./scripts/compare_cda_protocols.sh --label reviewer_cda
+sudo ./scripts/run_cda_paper_grid.sh --out-dir run_logs/test_cda_paper
 ```
 
-- Output directory: `run_logs/cda_protocols/reviewer_cda/`
+- Output directory: `run_logs/test_cda_paper/`
 - Key output files:
-  - `run_logs/cda_protocols/reviewer_cda/summary.json`
-  - `run_logs/cda_protocols/reviewer_cda/summary.md`
-  - `run_logs/cda_protocols/reviewer_cda/asterisk_cda/p*.json`
-  - `run_logs/cda_protocols/reviewer_cda/asterisk2_cda_sh/p*.json`
-  - `run_logs/cda_protocols/reviewer_cda/asterisk2_cda_dh/p*.json`
+  - `run_logs/test_cda_paper/cda_owd20ms_n5/raw/summary.json`
+  - `run_logs/test_cda_paper/cda_owd20ms_n10/raw/summary.json`
+  - `run_logs/test_cda_paper/cda_owd50ms_n16/raw/summary.json`
+- Notes: this command runs the paper's CDA grid with `M=N=50` and `n=5,10,16`.
 
 ## Repository scope
 
