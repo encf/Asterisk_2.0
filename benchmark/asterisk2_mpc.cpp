@@ -74,6 +74,7 @@ void benchmark(const bpo::variables_map& opts) {
   } else {
     throw std::runtime_error("Asterisk2.0 benchmark currently supports localhost only");
   }
+  std::cerr << "BOUND_OK pid=" << pid << " port=" << port << std::endl;
 
   auto circ = generateCircuit(gates_per_level, depth).orderGatesByLevel();
 

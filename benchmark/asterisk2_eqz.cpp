@@ -36,6 +36,7 @@ void benchmark(const bpo::variables_map& opts) {
   }
 
   auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, port, nullptr, true);
+  std::cerr << "BOUND_OK pid=" << pid << " port=" << port << std::endl;
   common::utils::Circuit<Field> input_circ;
   auto w0 = input_circ.newInputWire();
   auto level_circ = input_circ.orderGatesByLevel();

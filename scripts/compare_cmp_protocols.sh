@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
+source "${ROOT_DIR}/scripts/lib_localhost_runner.sh"
 
 N=5
 COMPARE_COUNT=1
@@ -33,90 +34,6 @@ Options:
 EOF
 }
 
-compute_port_stride() {
-  local total_parties=$1
-  python3 - "$total_parties" <<'PY'
-import sys
-n_total = int(sys.argv[1])
-print(2 * n_total * n_total + 64)
-PY
-}
-
-pick_free_base_port() {
-  local width=$1
-  python3 - "$width" <<'PY'
-import socket
-import sys
-
-START = 30000
-END = 65000
-WIDTH = int(sys.argv[1])
-STRIDE = 16
-
-def range_is_free(base):
-    for port in range(base, base + WIDTH):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(("0.0.0.0", port))
-        except OSError:
-            s.close()
-            return False
-        s.close()
-    return True
-
-for base in range(START, END - WIDTH + 1, STRIDE):
-    if range_is_free(base):
-        print(base)
-        break
-else:
-    raise SystemExit("Could not find a free port range for comparison benchmark")
-PY
-}
-
-ensure_base_port_available() {
-  local base_port="$1"
-  local width="$2"
-  python3 - "$base_port" "$width" <<'PY'
-import socket
-import sys
-
-base = int(sys.argv[1])
-width = int(sys.argv[2])
-if base < 1024 or base + width - 1 > 65535:
-    raise SystemExit(f"Invalid base port {base}: need a free range up to {base + width - 1} within 1024..65535")
-
-try:
-    for port in range(base, base + width):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("0.0.0.0", port))
-except OSError as exc:
-    raise SystemExit(f"Base port {base} is not usable: {exc}")
-PY
-}
-
-wait_for_jobs() {
-  local -a jobs=("$@")
-  local idx
-  for idx in "${!jobs[@]}"; do
-    local pid="${jobs[$idx]}"
-    if ! wait "${pid}"; then
-      local status=$?
-      local j
-      for j in "${!jobs[@]}"; do
-        if (( j > idx )); then
-          kill "${jobs[$j]}" 2>/dev/null || true
-        fi
-      done
-      for j in "${!jobs[@]}"; do
-        if (( j > idx )); then
-          wait "${jobs[$j]}" 2>/dev/null || true
-        fi
-      done
-      return "${status}"
-    fi
-  done
-}
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--num-parties) N="$2"; shift 2 ;;
@@ -139,69 +56,43 @@ fi
 
 mkdir -p "${RUN_OUT_DIR}"
 
-for bin in asterisk_cmp_offline asterisk_cmp_online asterisk2_bgtez; do
-  if [[ ! -x "${BUILD_DIR}/benchmarks/${bin}" ]]; then
-    echo "Missing benchmark binary: ${BUILD_DIR}/benchmarks/${bin}" >&2
-    echo "Please build benchmarks first, for example:" >&2
-    echo "  cmake -S \"${ROOT_DIR}\" -B \"${BUILD_DIR}\" -DCMAKE_BUILD_TYPE=Release" >&2
-    echo "  cmake --build \"${BUILD_DIR}\" -j\$(nproc) --target benchmarks" >&2
-    exit 1
-  fi
-done
+if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+  cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache >/dev/null
+fi
+cmake --build "${BUILD_DIR}" -j"$(nproc)" --target benchmarks >/dev/null
 
 TOTAL_PARTIES=$((N + 1))
-PORT_STRIDE="$(compute_port_stride "${TOTAL_PARTIES}")"
+PORT_STRIDE="$(localhost_compute_port_stride "${TOTAL_PARTIES}" 64)"
+TOTAL_PORT_WIDTH=$((4 * PORT_STRIDE))
 
 if [[ -n "${BASE_PORT}" ]]; then
-  ensure_base_port_available "${BASE_PORT}" "$((4 * PORT_STRIDE))"
+  localhost_ensure_base_port_available "${BASE_PORT}" "${TOTAL_PORT_WIDTH}"
+else
+  BASE_PORT="$(localhost_pick_free_base_port "${TOTAL_PORT_WIDTH}")"
 fi
 
 run_multiparty() {
   local tag="$1"
-  local port="${2:-}"
+  local port="$2"
   shift 2
   local -a cmd=("$@")
   local run_dir="${RUN_OUT_DIR}/${tag}"
-  local log_dir="${run_dir}/logs"
-  if [[ -z "${port}" ]]; then
-    port="$(pick_free_base_port "${PORT_STRIDE}")"
-  fi
   echo "[RUN] tag=${tag}, compare_count=${COMPARE_COUNT}, port=${port}"
-  rm -rf "${run_dir}"
-  mkdir -p "${log_dir}"
-  local -a jobs=()
-  for pid in $(seq 0 "${N}"); do
-    "${cmd[@]}" --localhost -n "${N}" -p "${pid}" --port "${port}" -o "${run_dir}/p${pid}.json" \
-      >"${log_dir}/p${pid}.log" 2>&1 &
-    jobs+=("$!")
-  done
-  wait_for_jobs "${jobs[@]}"
+  localhost_run_multiparty_group "${run_dir}" "${N}" "${port}" "${PORT_STRIDE}" "${cmd[@]}"
   echo "[DONE] tag=${tag}"
 }
 
-if [[ -n "${BASE_PORT}" ]]; then
-  run_multiparty "asterisk_offline" "${BASE_PORT}" \
-    "${BUILD_DIR}/benchmarks/asterisk_cmp_offline" -c "${COMPARE_COUNT}" -r 1
-  run_multiparty "asterisk_online" "$((BASE_PORT + PORT_STRIDE))" \
-    "${BUILD_DIR}/benchmarks/asterisk_cmp_online" -c "${COMPARE_COUNT}" -r 1
-  run_multiparty "asterisk2_bgtez_sh" "$((BASE_PORT + 2 * PORT_STRIDE))" \
-    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
-    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-  run_multiparty "asterisk2_bgtez_mal" "$((BASE_PORT + 3 * PORT_STRIDE))" \
-    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
-    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-else
-  run_multiparty "asterisk_offline" "" \
-    "${BUILD_DIR}/benchmarks/asterisk_cmp_offline" -c "${COMPARE_COUNT}" -r 1
-  run_multiparty "asterisk_online" "" \
-    "${BUILD_DIR}/benchmarks/asterisk_cmp_online" -c "${COMPARE_COUNT}" -r 1
-  run_multiparty "asterisk2_bgtez_sh" "" \
-    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
-    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-  run_multiparty "asterisk2_bgtez_mal" "" \
-    "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
-    --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
-fi
+run_multiparty "asterisk_offline" "${BASE_PORT}" \
+  "${BUILD_DIR}/benchmarks/asterisk_cmp_offline" -c "${COMPARE_COUNT}" -r 1
+run_multiparty "asterisk_online" "$((BASE_PORT + PORT_STRIDE))" \
+  "${BUILD_DIR}/benchmarks/asterisk_cmp_online" -c "${COMPARE_COUNT}" -r 1
+run_multiparty "asterisk2_bgtez_sh" "$((BASE_PORT + 2 * PORT_STRIDE))" \
+  "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model semi-honest \
+  --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
+run_multiparty "asterisk2_bgtez_mal" "$((BASE_PORT + 3 * PORT_STRIDE))" \
+  "${BUILD_DIR}/benchmarks/asterisk2_bgtez" --security-model malicious \
+  --lx "${LX}" --slack "${SLACK}" --x-clear 123 -r "${COMPARE_COUNT}"
 
 python3 - "${RUN_OUT_DIR}" "${N}" "${COMPARE_COUNT}" "${LABEL}" "${LX}" "${SLACK}" <<'PY'
 import json

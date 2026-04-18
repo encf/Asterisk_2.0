@@ -73,6 +73,7 @@ void benchmark(const bpo::variables_map& opts) {
   const auto x_clear = opts["x-clear"].as<int64_t>();
 
   auto network = makeNetwork(opts, pid, nP, port);
+  std::cerr << "BOUND_OK pid=" << pid << " port=" << port << std::endl;
 
   json output_data;
   output_data["details"] = {{"compare_count", compare_count},

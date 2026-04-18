@@ -43,6 +43,7 @@ void benchmark(const bpo::variables_map& opts) {
   }
 
   auto network = std::make_shared<io::NetIOMP>(pid, nP + 1, port, nullptr, true);
+  std::cerr << "BOUND_OK pid=" << pid << " port=" << port << std::endl;
 
   common::utils::DarkPool<Field> darkpool_ob(sell_list_size, buy_list_size);
   darkpool_ob.resizeList();

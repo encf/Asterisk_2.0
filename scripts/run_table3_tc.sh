@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPARE_SCRIPT="${ROOT_DIR}/scripts/compare_mul_protocols.sh"
 OUT_DIR="${ROOT_DIR}/run_logs/table3_tc"
+source "${ROOT_DIR}/scripts/lib_localhost_runner.sh"
 
 BANDWIDTH="100mbit"
 CHAIN_MUL=10000
@@ -129,15 +130,6 @@ if [[ ! -x "${COMPARE_SCRIPT}" ]]; then
   exit 1
 fi
 
-compute_port_stride() {
-  local total_parties=$1
-  python3 - "$total_parties" <<'PY'
-import sys
-n_total = int(sys.argv[1])
-print(2 * n_total * n_total + 64)
-PY
-}
-
 validate_port_plan() {
   local start_port="$1"
   shift
@@ -148,7 +140,7 @@ validate_port_plan() {
   for n in "${parties[@]}"; do
     local total_parties=$((n + 1))
     local stride
-    stride="$(compute_port_stride "${total_parties}")"
+    stride="$(localhost_compute_port_stride "${total_parties}" 64)"
     last_used=$((current + 4 * stride - 1))
     current=$((current + 4 * stride))
   done
@@ -198,14 +190,18 @@ for delay_ms in "${ONE_WAY_DELAYS_MS[@]}"; do
     condition_dir="${env_dir}/n${n}"
     raw_dir="${condition_dir}/raw"
     mkdir -p "${condition_dir}"
+    total_parties=$((n + 1))
+    port_stride="$(localhost_compute_port_stride "${total_parties}" 64)"
+    port_width=$((4 * port_stride))
+    condition_base_port="$(localhost_pick_free_base_port "${port_width}" "${current_port}")"
 
-    echo "--- Running n=${n} at one-way delay ${delay_ms}ms (approx RTT $((delay_ms * 2))ms) ---"
+    echo "--- Running n=${n} at one-way delay ${delay_ms}ms (approx RTT $((delay_ms * 2))ms), base_port=${condition_base_port} ---"
     "${COMPARE_SCRIPT}" \
       -n "${n}" \
       -d "${CHAIN_MUL}" \
       -g 1 \
       -r "${REPEAT}" \
-      -p "${current_port}" \
+      -p "${condition_base_port}" \
       -o "${raw_dir}" | tee "${condition_dir}/compare_output.txt"
 
     python3 - "${raw_dir}" "${n}" "${delay_ms}" "${BANDWIDTH}" "${SUMMARY_CSV}" <<'PY'
@@ -321,9 +317,7 @@ with summary_csv.open("a", encoding="utf-8") as f:
         )
 PY
 
-    total_parties=$((n + 1))
-    port_stride="$(compute_port_stride "${total_parties}")"
-    current_port=$((current_port + 4 * port_stride))
+    current_port=$((condition_base_port + port_width))
   done
 done
 

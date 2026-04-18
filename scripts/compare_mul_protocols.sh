@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
+source "${ROOT_DIR}/scripts/lib_localhost_runner.sh"
 
 N=5
 CHAIN_MUL=10000
@@ -52,85 +53,21 @@ done
 
 mkdir -p "${OUT_DIR}"
 
-compute_port_stride() {
-  local total_parties=$1
-  python3 - "$total_parties" <<'PY'
-import sys
-n_total = int(sys.argv[1])
-print(2 * n_total * n_total + 64)
-PY
-}
-
-pick_free_base_port() {
-  local width=$1
-  python3 - "$width" <<'PY'
-import socket
-import sys
-
-START = 30000
-END = 65000
-WIDTH = int(sys.argv[1])
-STRIDE = 16
-
-def range_is_free(base):
-    for port in range(base, base + WIDTH):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(("0.0.0.0", port))
-        except OSError:
-            s.close()
-            return False
-        s.close()
-    return True
-
-for base in range(START, END - WIDTH + 1, STRIDE):
-    if range_is_free(base):
-        print(base)
-        break
-else:
-    raise SystemExit("Could not find a free port range for multiplication benchmark")
-PY
-}
-
-ensure_base_port_available() {
-  local base_port="$1"
-  local width="$2"
-  python3 - "$base_port" "$width" <<'PY'
-import socket
-import sys
-
-base = int(sys.argv[1])
-width = int(sys.argv[2])
-if base < 1024 or base + width - 1 > 65535:
-    raise SystemExit(f"Invalid base port {base}: need a free range up to {base + width - 1} within 1024..65535")
-
-try:
-    for port in range(base, base + width):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("0.0.0.0", port))
-except OSError as exc:
-    raise SystemExit(f"Base port {base} is not usable: {exc}")
-PY
-}
-
 TOTAL_PARTIES=$((N + 1))
-PORT_STRIDE="$(compute_port_stride "${TOTAL_PARTIES}")"
+PORT_STRIDE="$(localhost_compute_port_stride "${TOTAL_PARTIES}" 64)"
 TOTAL_PORT_WIDTH=$((4 * PORT_STRIDE))
 
 if [[ -n "${BASE_PORT}" ]]; then
-  ensure_base_port_available "${BASE_PORT}" "${TOTAL_PORT_WIDTH}"
+  localhost_ensure_base_port_available "${BASE_PORT}" "${TOTAL_PORT_WIDTH}"
 else
-  BASE_PORT="$(pick_free_base_port "${TOTAL_PORT_WIDTH}")"
+  BASE_PORT="$(localhost_pick_free_base_port "${TOTAL_PORT_WIDTH}")"
 fi
 
-if [[ ! -x "${BUILD_DIR}/benchmarks/asterisk_offline" ]] || \
-   [[ ! -x "${BUILD_DIR}/benchmarks/asterisk_online" ]] || \
-   [[ ! -x "${BUILD_DIR}/benchmarks/asterisk2_mpc" ]]; then
-  echo "[INFO] benchmark binaries missing, building benchmarks target..."
+if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
   cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-  cmake --build "${BUILD_DIR}" -j"$(nproc)" --target benchmarks
 fi
+cmake --build "${BUILD_DIR}" -j"$(nproc)" --target benchmarks >/dev/null
 
 run_multiparty() {
   local tag="$1"
@@ -138,22 +75,9 @@ run_multiparty() {
   shift 2
   local -a cmd=("$@")
   local run_dir="${OUT_DIR}/${tag}"
-  local log_dir="${run_dir}/logs"
-  mkdir -p "${run_dir}"
-  rm -f "${run_dir}"/p*.json
-  mkdir -p "${log_dir}"
-  rm -f "${log_dir}"/p*.log
-  local -a pids=()
-  for pid in $(seq 0 "${N}"); do
-    local out_json="${run_dir}/p${pid}.json"
-    local out_log="${log_dir}/p${pid}.log"
-    "${cmd[@]}" --localhost -n "${N}" -p "${pid}" --port "${port}" -r "${REPEAT}" -o "${out_json}" \
-      >"${out_log}" 2>&1 &
-    pids+=("$!")
-  done
-  for job in "${pids[@]}"; do
-    wait "${job}"
-  done
+  echo "[RUN] tag=${tag}, chain_mul=${CHAIN_MUL}, repeat=${REPEAT}, port=${port}"
+  localhost_run_multiparty_group "${run_dir}" "${N}" "${port}" "${PORT_STRIDE}" "${cmd[@]}" -r "${REPEAT}"
+  echo "[DONE] tag=${tag}"
 }
 
 run_multiparty "asterisk_offline" "${BASE_PORT}" \

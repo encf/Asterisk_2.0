@@ -4,6 +4,8 @@ This repository implements the paper's semi-honest and malicious MPF protocols, 
 
 For faithful localhost reproduction, set the number of computing parties \(n\) to be at most the number of available processor threads on the host. Otherwise, local scheduling contention can dominate the measured latency and distort the paper-style results.
 
+All top-level reproduction scripts below now use a shared localhost launcher: the script allocates one non-overlapping port range for the whole experiment, passes the assigned ports to every child process, waits for each child to report successful network initialization (`BOUND_OK`) or to finish successfully, and kills/cleans up the remaining children on failure. Run one top-level script at a time on the same host.
+
 ## Mapping to the paper
 
 - `src/Asterisk2.0/`: core protocol implementation of Asterisk 2.0.
@@ -27,6 +29,8 @@ For faithful localhost reproduction, set the number of computing parties \(n\) t
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)" --target benchmarks
 ```
+
+The reproduction scripts also perform incremental rebuilds automatically, so an explicit manual rebuild is not required before every run.
 
 3. Run one sanity check.
 
@@ -52,6 +56,7 @@ sudo bash ./scripts/run_table3_tc.sh --out-dir run_logs/test_mul_paper
   - `run_logs/test_mul_paper/bw_100mbit_owd_20ms/n5/compare_output.txt`
   - `run_logs/test_mul_paper/bw_100mbit_owd_50ms/n16/compare_output.txt`
 - Notes: this command directly runs the paper's integer-multiplication experiment grid, namely Net-L / Net-H, `n=5,10,16`, and 10,000 dependent multiplications. Per-party execution logs are written under each run directory's `logs/` subdirectory.
+- Operational detail: `run_table3_tc.sh` is the parent launcher for this experiment. It configures `tc`, reserves a full port range for each condition, starts all parties, waits for successful bind/ready signals, and cleans up child processes automatically.
 
 ### Table IV: comparison
 
@@ -68,6 +73,7 @@ sudo ./scripts/run_comparison_paper_grid.sh --out-dir run_logs/test_cmp_paper
   - `run_logs/test_cmp_paper/cmp_owd20ms_n10/raw/summary.json`
   - `run_logs/test_cmp_paper/cmp_owd50ms_n16/raw/summary.json`
 - Notes: this command runs the paper's comparison grid, namely Net-L / Net-H, `n=5,10,16`, with one comparison per condition.
+- Operational detail: the script allocates one full port block per condition and assigns fixed offsets to the baseline / semi-honest / malicious sub-runs. No manual `--base-port` selection is needed for normal use.
 
 ### Table III: fixed-point multiplication
 
@@ -83,6 +89,7 @@ sudo ./scripts/run_comparison_paper_grid.sh --out-dir run_logs/test_cmp_paper
   - `run_logs/test_fixedpoint_paper/semi-honest/p*.json`
   - `run_logs/test_fixedpoint_paper/malicious/p*.json`
 - Notes: the script defaults now match the paper's Asterisk 2.0 rows, namely `n=5` and 1,000 consecutive fixed-point multiplications. Per-party execution logs are written under `run_logs/test_fixedpoint_paper/*/logs/`.
+- Operational detail: the script reserves one full port block up front and splits it between the semi-honest and malicious runs.
 
 ### Section: probabilistic truncation
 
@@ -100,6 +107,7 @@ sudo ./scripts/run_truncation_paper_grid.sh --out-dir run_logs/test_truncation_p
   - `run_logs/test_truncation_paper/owd50ms_n10/raw/owd50ms_n10/summary.json`
   - `run_logs/test_truncation_paper/owd50ms_n16/raw/owd50ms_n16/summary.json`
 - Notes: this command runs the paper's truncation grid, namely Net-L / Net-H, `n=5,10,16`, batch size 1,000, and single-latency repeat 5.
+- Operational detail: each condition is launched as one parent-controlled group. The parent script reserves the full port range needed by `single/batch × semi-honest/malicious` before any child starts.
 
 ### Table V: volume matching
 
@@ -116,6 +124,7 @@ sudo ./scripts/run_vm_paper_grid.sh --out-dir run_logs/test_vm_paper
   - `run_logs/test_vm_paper/vm_owd20ms_n10/raw/summary.json`
   - `run_logs/test_vm_paper/vm_owd50ms_n16/raw/summary.json`
 - Notes: this command runs the paper's VM grid with `M=N=32`, unit order size, and `n=5,10,16`.
+- Operational detail: the VM compare script reserves one full port block up front and partitions it across the legacy baseline, the semi-honest run, and the malicious run.
 
 ### Table VI: continuous double auction
 
@@ -132,6 +141,7 @@ sudo ./scripts/run_cda_paper_grid.sh --out-dir run_logs/test_cda_paper
   - `run_logs/test_cda_paper/cda_owd20ms_n10/raw/summary.json`
   - `run_logs/test_cda_paper/cda_owd50ms_n16/raw/summary.json`
 - Notes: this command runs the paper's CDA grid with `M=N=50` and `n=5,10,16`.
+- Operational detail: the CDA compare script follows the same parent-controlled launch procedure as VM and comparison.
 
 ## Repository scope
 
