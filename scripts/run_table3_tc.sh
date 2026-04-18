@@ -8,7 +8,7 @@ OUT_DIR="${ROOT_DIR}/run_logs/table3_tc"
 BANDWIDTH="100mbit"
 CHAIN_MUL=10000
 REPEAT=1
-BASE_PORT=61000
+BASE_PORT=30000
 PING_COUNT=5
 CLEAR_TC_ON_EXIT=1
 
@@ -37,7 +37,7 @@ Options:
   --parties <list>          comma-separated participant counts (default: 5,10,16)
   --chain-mul <int>         number of dependent multiplications (default: 10000)
   --repeat <int>            benchmark repeat count passed to compare_mul_protocols.sh (default: 1)
-  --base-port <int>         base port for the first condition (default: 61000)
+  --base-port <int>         base port for the first condition (default: 30000)
   --ping-count <int>        ping probes used to snapshot RTT after tc setup (default: 5)
   --out-dir <path>          output directory (default: run_logs/table3_tc)
   --keep-tc                 keep the final tc rule instead of clearing it on exit
@@ -128,6 +128,39 @@ if [[ ! -x "${COMPARE_SCRIPT}" ]]; then
   echo "Expected executable compare script at ${COMPARE_SCRIPT}" >&2
   exit 1
 fi
+
+compute_port_stride() {
+  local total_parties=$1
+  python3 - "$total_parties" <<'PY'
+import sys
+n_total = int(sys.argv[1])
+print(2 * n_total * n_total + 64)
+PY
+}
+
+validate_port_plan() {
+  local start_port="$1"
+  shift
+  local -a parties=("$@")
+  local current="$start_port"
+  local last_used=0
+  local n
+  for n in "${parties[@]}"; do
+    local total_parties=$((n + 1))
+    local stride
+    stride="$(compute_port_stride "${total_parties}")"
+    last_used=$((current + 4 * stride - 1))
+    current=$((current + 4 * stride))
+  done
+  local num_envs=${#ONE_WAY_DELAYS_MS[@]}
+  last_used=$((start_port + (last_used - start_port + 1) * num_envs - 1))
+  if (( start_port < 1024 || last_used > 65535 )); then
+    echo "Invalid --base-port=${start_port}: this table run needs ports up to ${last_used}, which must stay within 1024..65535." >&2
+    exit 1
+  fi
+}
+
+validate_port_plan "${BASE_PORT}" "${PARTIES[@]}"
 
 mkdir -p "${OUT_DIR}"
 SUMMARY_CSV="${OUT_DIR}/table3_summary.csv"
@@ -288,7 +321,9 @@ with summary_csv.open("a", encoding="utf-8") as f:
         )
 PY
 
-    current_port=$((current_port + 1000))
+    total_parties=$((n + 1))
+    port_stride="$(compute_port_stride "${total_parties}")"
+    current_port=$((current_port + 4 * port_stride))
   done
 done
 

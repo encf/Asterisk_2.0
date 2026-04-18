@@ -9,7 +9,7 @@ FIXED_MUL_COUNT=1000
 FRAC_BITS=8
 ELL_X=40
 SLACK=8
-BASE_PORT=52000
+BASE_PORT=""
 OUT_DIR="${ROOT_DIR}/run_logs/fixedpoint_mul_compare"
 
 usage() {
@@ -27,7 +27,7 @@ Options:
   --frac-bits <int>             Fractional bits m for truncation (default: 8)
   --ell-x <int>                 Truncation ell_x (default: 40)
   --slack <int>                 Truncation slack s (default: 8)
-  -p, --base-port <int>         Base port (default: 52000)
+  -p, --base-port <int>         Base port (default: auto-pick)
   -o, --out-dir <path>          Output directory (default: run_logs/fixedpoint_mul_compare)
   -h, --help                    Show help
 EOF
@@ -48,6 +48,85 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "${OUT_DIR}"
+
+compute_port_stride() {
+  local total_parties=$1
+  python3 - "$total_parties" <<'PY'
+import sys
+n_total = int(sys.argv[1])
+print(2 * n_total * n_total + 64)
+PY
+}
+
+pick_free_base_port() {
+  local width=$1
+  python3 - "$width" <<'PY'
+import socket
+import sys
+
+START = 30000
+END = 65000
+WIDTH = int(sys.argv[1])
+STRIDE = 16
+
+def range_is_free(base):
+    sockets = []
+    try:
+        for port in range(base, base + WIDTH):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("0.0.0.0", port))
+            sockets.append(s)
+        return True
+    except OSError:
+        return False
+    finally:
+        for s in sockets:
+            s.close()
+
+for base in range(START, END - WIDTH + 1, STRIDE):
+    if range_is_free(base):
+        print(base)
+        break
+else:
+    raise SystemExit("Could not find a free port range for fixed-point multiplication benchmark")
+PY
+}
+
+ensure_base_port_available() {
+  local base_port="$1"
+  local width="$2"
+  python3 - "$base_port" "$width" <<'PY'
+import socket
+import sys
+
+base = int(sys.argv[1])
+width = int(sys.argv[2])
+if base < 1024 or base + width - 1 > 65535:
+    raise SystemExit(f"Invalid base port {base}: need a free range up to {base + width - 1} within 1024..65535")
+
+sockets = []
+try:
+    for port in range(base, base + width):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("0.0.0.0", port))
+        sockets.append(s)
+except OSError as exc:
+    raise SystemExit(f"Base port {base} is not usable: {exc}")
+finally:
+    for s in sockets:
+        s.close()
+PY
+}
+
+TOTAL_PARTIES=$((N + 1))
+PORT_STRIDE="$(compute_port_stride "${TOTAL_PARTIES}")"
+TOTAL_PORT_WIDTH=$((2 * PORT_STRIDE))
+
+if [[ -n "${BASE_PORT}" ]]; then
+  ensure_base_port_available "${BASE_PORT}" "${TOTAL_PORT_WIDTH}"
+else
+  BASE_PORT="$(pick_free_base_port "${TOTAL_PORT_WIDTH}")"
+fi
 
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache >/dev/null
@@ -74,7 +153,7 @@ run_model() {
 }
 
 run_model semi-honest "${BASE_PORT}"
-run_model malicious "$((BASE_PORT + 200))"
+run_model malicious "$((BASE_PORT + PORT_STRIDE))"
 
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
 if [[ -z "${PYTHON_BIN}" ]]; then
